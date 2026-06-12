@@ -4,11 +4,13 @@ const DEFAULT_OPTIONS = {
   useWindowTitler: true,
   periodicSaveSecs: 30,
   autoTrackNewWindows: false,
+  setTitlePreface: true,
 };
 
 const useWindowTitler = document.getElementById("useWindowTitler");
 const periodicSaveSecs = document.getElementById("periodicSaveSecs");
 const autoTrackNewWindows = document.getElementById("autoTrackNewWindows");
+const setTitlePreface = document.getElementById("setTitlePreface");
 const exportBtn = document.getElementById("export");
 const importBtn = document.getElementById("import");
 const importFile = document.getElementById("import-file");
@@ -20,6 +22,7 @@ async function load() {
   useWindowTitler.checked = options.useWindowTitler;
   periodicSaveSecs.value = options.periodicSaveSecs;
   autoTrackNewWindows.checked = options.autoTrackNewWindows;
+  setTitlePreface.checked = options.setTitlePreface;
 }
 
 async function save() {
@@ -27,6 +30,7 @@ async function save() {
     useWindowTitler: useWindowTitler.checked,
     periodicSaveSecs: Math.max(0, parseInt(periodicSaveSecs.value, 10) || 0),
     autoTrackNewWindows: autoTrackNewWindows.checked,
+    setTitlePreface: setTitlePreface.checked,
   };
   await browser.storage.local.set({ options });
 }
@@ -34,6 +38,7 @@ async function save() {
 useWindowTitler.addEventListener("change", save);
 periodicSaveSecs.addEventListener("change", save);
 autoTrackNewWindows.addEventListener("change", save);
+setTitlePreface.addEventListener("change", save);
 
 /* ---------------- export / import ---------------- */
 

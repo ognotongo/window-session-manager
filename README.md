@@ -39,6 +39,15 @@ works too: `npx web-ext run` from this directory.
 - **Restart-proof**: Tracked windows are tagged via the `sessions` API, so if
   Firefox restarts and restores your windows (or you use *Reopen Closed
   Window*), they are re-associated with their sessions automatically.
+- **Session name in the window title** (on by default, see Options): the
+  session name is written into the window title (`titlePreface`) when you
+  track, rename, or restore a session, so windows stay visibly labeled — the
+  same mechanism Window Titler uses. Renaming in the sidebar therefore
+  updates the title bar immediately. Caveat: Window Titler's own stored
+  names cannot be updated from outside, so if you also name the same window
+  there, the two extensions overwrite each other (last writer wins,
+  e.g. after a restart). Best used as a replacement for Window Titler on
+  tracked windows.
 - **Track all**: the ➕ button in the sidebar header tracks every currently
   untracked window at once, naming each from its Window Titler preface when
   present (timestamped fallback otherwise). Private windows are skipped.
