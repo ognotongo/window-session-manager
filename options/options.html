@@ -30,6 +30,21 @@
 
   <div class="field">
     <label>
+      <input type="checkbox" id="setTitlePreface" />
+      Show the session name in the window title
+    </label>
+    <div class="hint">
+      Writes “[Session name]” into the window title when you track, rename,
+      or restore a session — the same mechanism Window Titler uses, so
+      restored windows keep their visible name. Caution if you actively use
+      Window Titler on the same windows: the two extensions overwrite each
+      other (last writer wins), and Window Titler may reapply its stored name
+      after a browser restart.
+    </div>
+  </div>
+
+  <div class="field">
+    <label>
       <input type="checkbox" id="autoTrackNewWindows" />
       Automatically track new windows
     </label>

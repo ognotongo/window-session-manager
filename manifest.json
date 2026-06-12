@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Window Session Manager",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "description": "Treats each window as a named session. Auto-saves tabs continuously, lists open and closed sessions in the sidebar, and restores closed sessions into new windows.",
   "browser_specific_settings": {
     "gecko": {

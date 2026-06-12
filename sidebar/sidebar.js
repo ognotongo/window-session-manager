@@ -357,6 +357,9 @@ $("#open-options").addEventListener("click", () =>
   browser.runtime.openOptionsPage()
 );
 $("#save-now").addEventListener("click", () => send({ type: "saveNow" }));
+$("#track-all").addEventListener("click", () =>
+  send({ type: "trackAllWindows" })
+);
 
 (async function init() {
   const win = await browser.windows.getCurrent();

@@ -17,6 +17,9 @@ const DEFAULT_OPTIONS = {
   periodicSaveSecs: 30,
   // Turn every new (non-private) window into a session automatically.
   autoTrackNewWindows: false,
+  // Write the session name into the window title (titlePreface) on track,
+  // rename, and restore — the same mechanism Window Titler uses.
+  setTitlePreface: true,
 };
 
 const SNAPSHOT_DEBOUNCE_MS = 750;
@@ -140,6 +143,25 @@ async function getSuggestedName(windowId) {
   return preface || null;
 }
 
+/* ---------------- window title preface ---------------- */
+
+/*
+ * Note: this competes with Window Titler for the same titlePreface — last
+ * writer wins. We deliberately take it over for tracked windows; Window
+ * Titler may reapply its own stored name on browser restart if the window
+ * was also named there.
+ */
+function applyTitlePreface(windowId, name) {
+  if (!options.setTitlePreface) return;
+  browser.windows
+    .update(windowId, { titlePreface: name ? `[${name}] ` : "" })
+    .catch(() => {});
+}
+
+function clearTitlePreface(windowId) {
+  browser.windows.update(windowId, { titlePreface: "" }).catch(() => {});
+}
+
 /* ---------------- tracking ---------------- */
 
 function newSessionId() {
@@ -166,9 +188,31 @@ async function trackWindow(windowId, name) {
   await browser.sessions
     .setWindowValue(windowId, WINDOW_VALUE_KEY, id)
     .catch(() => {});
+  applyTitlePreface(windowId, sessions[id].name);
   await snapshotWindow(windowId);
   broadcast();
   return sessions[id];
+}
+
+async function trackAllWindows() {
+  const wins = await browser.windows.getAll({ windowTypes: ["normal"] });
+  const usedNames = new Set(Object.values(sessions).map((s) => s.name));
+  let tracked = 0;
+  for (const win of wins) {
+    if (win.incognito) continue; // never persist private windows to disk
+    if (windowToSession.has(win.id)) continue;
+    const suggested = await getSuggestedName(win.id).catch(() => null);
+    let name = suggested || `Session ${new Date().toLocaleString()}`;
+    if (usedNames.has(name)) {
+      let n = 2;
+      while (usedNames.has(`${name} (${n})`)) n++;
+      name = `${name} (${n})`;
+    }
+    usedNames.add(name);
+    await trackWindow(win.id, name);
+    tracked++;
+  }
+  return { tracked };
 }
 
 async function untrackWindow(windowId) {
@@ -186,6 +230,9 @@ async function untrackWindow(windowId) {
   await browser.sessions
     .removeWindowValue(windowId, WINDOW_VALUE_KEY)
     .catch(() => {});
+  // Only clear a preface we set ourselves; with the option off the preface
+  // may belong to Window Titler.
+  if (options.setTitlePreface) clearTitlePreface(windowId);
   await persistSessions();
   broadcast();
 }
@@ -201,6 +248,9 @@ async function renameSession(sessionId, name) {
   const session = sessions[sessionId];
   if (!session) return;
   session.name = (name || "").trim() || session.name;
+  if (session.open && session.windowId != null) {
+    applyTitlePreface(session.windowId, session.name);
+  }
   await persistSessions();
   broadcast();
 }
@@ -311,6 +361,7 @@ async function openSession(sessionId) {
   await browser.sessions
     .setWindowValue(win.id, WINDOW_VALUE_KEY, sessionId)
     .catch(() => {});
+  applyTitlePreface(win.id, session.name);
 
   for (let i = 0; i < tabs.length; i++) {
     const t = tabs[i];
@@ -410,6 +461,7 @@ async function associateWindow(win) {
     sessions[sessionId].open = true;
     sessions[sessionId].windowId = win.id;
     windowToSession.set(win.id, sessionId);
+    applyTitlePreface(win.id, sessions[sessionId].name);
     scheduleSnapshot(win.id);
   }
 }
@@ -508,8 +560,18 @@ browser.browserAction.onClicked.addListener(() => {
 
 browser.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.options) {
+    const before = options;
     options = { ...DEFAULT_OPTIONS, ...(changes.options.newValue || {}) };
     restartPeriodicTimer();
+    if (before.setTitlePreface !== options.setTitlePreface) {
+      for (const [windowId, sessionId] of windowToSession) {
+        if (options.setTitlePreface) {
+          applyTitlePreface(windowId, sessions[sessionId] && sessions[sessionId].name);
+        } else {
+          clearTitlePreface(windowId);
+        }
+      }
+    }
   }
 });
 
@@ -526,6 +588,8 @@ browser.runtime.onMessage.addListener((msg) => {
       return getSuggestedName(msg.windowId);
     case "trackWindow":
       return trackWindow(msg.windowId, msg.name);
+    case "trackAllWindows":
+      return trackAllWindows();
     case "untrackWindow":
       return untrackWindow(msg.windowId);
     case "openSession":
