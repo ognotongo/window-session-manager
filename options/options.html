@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body {
+      font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+      padding: 8px 12px;
+      max-width: 560px;
+    }
+    .field { margin-bottom: 14px; }
+    label { display: flex; align-items: center; gap: 8px; }
+    .hint { color: #777; font-size: 12px; margin: 3px 0 0 24px; }
+    input[type="number"] { width: 70px; }
+  </style>
+</head>
+<body>
+  <div class="field">
+    <label>
+      <input type="checkbox" id="useWindowTitler" />
+      Suggest session names from the window title preface
+    </label>
+    <div class="hint">
+      Works with the Window Titler extension: the name it shows in the window
+      title is offered as the default session name when you start tracking a
+      window. When disabled (or when no preface is found), you are simply
+      asked to type a name.
+    </div>
+  </div>
+
+  <div class="field">
+    <label>
+      <input type="checkbox" id="autoTrackNewWindows" />
+      Automatically track new windows
+    </label>
+    <div class="hint">
+      Every new window becomes a session without asking. The name is taken
+      from the window title preface when one appears (Window Titler),
+      otherwise a timestamped name is used — rename it later in the sidebar.
+      Private windows are never tracked.
+    </div>
+  </div>
+
+  <div class="field">
+    <label>
+      Also save every
+      <input type="number" id="periodicSaveSecs" min="0" step="5" />
+      seconds
+    </label>
+    <div class="hint">
+      Sessions are already saved automatically whenever tabs change (open,
+      close, navigate, pin, move). This adds a periodic safety-net snapshot.
+      Set to 0 to rely on tab-change saves only.
+    </div>
+  </div>
+
+  <hr />
+
+  <div class="field">
+    <button id="export">Export sessions…</button>
+    <button id="import">Import sessions…</button>
+    <input type="file" id="import-file" accept=".json,application/json" hidden />
+    <div class="hint">
+      Export downloads all sessions (open ones included, as snapshots) to a
+      JSON file. Import merges sessions from such a file as closed sessions;
+      re-importing the same file does not create duplicates.
+    </div>
+    <div id="io-status" class="hint"></div>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

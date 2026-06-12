@@ -1,0 +1,10 @@
+# web-ext build output
+web-ext-artifacts/
+
+# node tooling, if ever added
+node_modules/
+
+# editor/OS noise
+.vscode/
+Thumbs.db
+Desktop.ini

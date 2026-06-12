@@ -1,0 +1,365 @@
+"use strict";
+
+/*
+ * Sidebar UI. Each sidebar instance belongs to one window, so it can show
+ * whether *this* window is tracked, and offer to start tracking it.
+ *
+ * Note: window.prompt()/confirm() are unreliable in sidebar documents, so
+ * renaming and delete-confirmation are done inline.
+ */
+
+let currentWindowId = null;
+let state = { sessions: [], options: {} };
+
+// Transient UI state that must survive re-renders.
+let namingInProgress = false; // "track this window" name input is showing
+let suggestedName = "";
+let editingSessionId = null;  // session currently being renamed
+let confirmingDeleteId = null;
+const expandedSessions = new Set(); // session ids with their tab list shown
+
+const $ = (sel) => document.querySelector(sel);
+
+function send(msg) {
+  return browser.runtime.sendMessage(msg);
+}
+
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") node.className = v;
+    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else node.setAttribute(k, v);
+  }
+  for (const child of children) {
+    if (child == null) continue;
+    node.append(child);
+  }
+  return node;
+}
+
+function relativeTime(ts) {
+  if (!ts) return "";
+  const diff = Date.now() - ts;
+  const min = Math.round(diff / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min} min ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr} h ago`;
+  const days = Math.round(hr / 24);
+  if (days < 7) return `${days} d ago`;
+  return new Date(ts).toLocaleDateString();
+}
+
+/* ---------------- current window card ---------------- */
+
+function renderCurrentWindow() {
+  const container = $("#current-window");
+  container.textContent = "";
+  container.append(el("div", { class: "label" }, "This window"));
+
+  const mySession = state.sessions.find(
+    (s) => s.open && s.windowId === currentWindowId
+  );
+
+  if (mySession) {
+    container.append(
+      el(
+        "div",
+        { class: "row" },
+        el("span", { class: "dot", style: "background: var(--open)" }),
+        el("strong", {}, mySession.name),
+        el("span", { style: "flex:1" }),
+        el(
+          "button",
+          {
+            class: "secondary",
+            title: "Stop tracking this window. The session is kept as a closed snapshot.",
+            onclick: () => send({ type: "untrackWindow", windowId: currentWindowId }),
+          },
+          "Stop tracking"
+        )
+      )
+    );
+    return;
+  }
+
+  if (!namingInProgress) {
+    container.append(
+      el(
+        "div",
+        { class: "row" },
+        el("span", { class: "dot" }),
+        el("span", { style: "color: var(--fg-dim)" }, "Not tracked"),
+        el("span", { style: "flex:1" }),
+        el(
+          "button",
+          { class: "primary", onclick: startNaming },
+          "Track this window"
+        )
+      )
+    );
+    return;
+  }
+
+  // Name entry, prefilled with the Window Titler-derived suggestion if any.
+  const input = el("input", {
+    type: "text",
+    placeholder: "Session name",
+    value: suggestedName,
+    onkeydown: (e) => {
+      if (e.key === "Enter") confirmTrack(input.value);
+      if (e.key === "Escape") cancelNaming();
+    },
+  });
+  container.append(
+    el(
+      "div",
+      { class: "row" },
+      input,
+      el("button", { class: "primary", onclick: () => confirmTrack(input.value) }, "Save"),
+      el("button", { class: "secondary", onclick: cancelNaming }, "✕")
+    )
+  );
+  input.focus();
+  input.select();
+}
+
+async function startNaming() {
+  suggestedName =
+    (await send({ type: "getSuggestedName", windowId: currentWindowId })) || "";
+  namingInProgress = true;
+  renderCurrentWindow();
+}
+
+function cancelNaming() {
+  namingInProgress = false;
+  renderCurrentWindow();
+}
+
+async function confirmTrack(name) {
+  namingInProgress = false;
+  await send({
+    type: "trackWindow",
+    windowId: currentWindowId,
+    name: name || "Untitled session",
+  });
+}
+
+/* ---------------- session list ---------------- */
+
+function renderSessions() {
+  const container = $("#session-list");
+  container.textContent = "";
+
+  const open = state.sessions
+    .filter((s) => s.open)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const closed = state.sessions
+    .filter((s) => !s.open)
+    .sort((a, b) => (b.lastSaved || 0) - (a.lastSaved || 0));
+
+  if (!open.length && !closed.length) {
+    container.append(
+      el(
+        "div",
+        { class: "empty" },
+        "No sessions yet. Click “Track this window” above to start one."
+      )
+    );
+    return;
+  }
+
+  if (open.length) {
+    container.append(el("div", { class: "list-heading" }, "Open"));
+    open.forEach((s) => container.append(renderSession(s)));
+  }
+  if (closed.length) {
+    container.append(el("div", { class: "list-heading" }, "Closed"));
+    closed.forEach((s) => container.append(renderSession(s)));
+  }
+}
+
+function renderSession(s) {
+  const tabCount = (s.tabs || []).length;
+  const meta = s.open
+    ? `${tabCount} tab${tabCount === 1 ? "" : "s"} · open`
+    : `${tabCount} tab${tabCount === 1 ? "" : "s"} · saved ${relativeTime(s.lastSaved)}`;
+  const expanded = expandedSessions.has(s.id);
+
+  const row = el("div", {
+    class: `session${s.open ? " open" : ""}${editingSessionId === s.id ? " editing" : ""}`,
+    title: s.open
+      ? "Click to focus this window"
+      : "Click to reopen this session in a new window",
+    onclick: () => send({ type: "openSession", sessionId: s.id }),
+  });
+
+  row.append(
+    el(
+      "button",
+      {
+        class: "icon-btn chevron",
+        title: expanded ? "Hide tabs" : "Show tabs",
+        onclick: (e) => {
+          e.stopPropagation();
+          if (expanded) expandedSessions.delete(s.id);
+          else expandedSessions.add(s.id);
+          render();
+        },
+      },
+      expanded ? "▾" : "▸"
+    )
+  );
+  row.append(el("span", { class: "dot" }));
+
+  const info = el("div", { class: "info" });
+  if (editingSessionId === s.id) {
+    const input = el("input", {
+      type: "text",
+      value: s.name,
+      onclick: (e) => e.stopPropagation(),
+      onkeydown: (e) => {
+        if (e.key === "Enter") {
+          editingSessionId = null;
+          send({ type: "renameSession", sessionId: s.id, name: input.value });
+        }
+        if (e.key === "Escape") {
+          editingSessionId = null;
+          render();
+        }
+      },
+    });
+    info.append(input);
+    setTimeout(() => {
+      input.focus();
+      input.select();
+    }, 0);
+  } else {
+    info.append(el("div", { class: "name" }, s.name));
+    info.append(el("div", { class: "meta" }, meta));
+  }
+  row.append(info);
+
+  const actions = el("div", { class: "actions" });
+  actions.append(
+    el(
+      "button",
+      {
+        class: "icon-btn",
+        title: "Rename",
+        onclick: (e) => {
+          e.stopPropagation();
+          editingSessionId = s.id;
+          confirmingDeleteId = null;
+          render();
+        },
+      },
+      "✎"
+    )
+  );
+  actions.append(
+    el(
+      "button",
+      {
+        class: "icon-btn danger",
+        title:
+          confirmingDeleteId === s.id
+            ? "Click again to permanently delete"
+            : "Delete session",
+        onclick: (e) => {
+          e.stopPropagation();
+          if (confirmingDeleteId === s.id) {
+            confirmingDeleteId = null;
+            send({ type: "deleteSession", sessionId: s.id });
+          } else {
+            confirmingDeleteId = s.id;
+            render();
+          }
+        },
+      },
+      confirmingDeleteId === s.id ? "Sure?" : "🗑"
+    )
+  );
+  row.append(actions);
+
+  if (!expanded) return row;
+
+  const group = el("div", { class: "session-group" }, row);
+  group.append(renderTabList(s));
+  return group;
+}
+
+function faviconEl(t) {
+  const fallback = el("span", { class: "favicon fallback" });
+  if (!t.favIconUrl || !/^(https?|data):/i.test(t.favIconUrl)) return fallback;
+  const img = el("img", { class: "favicon", src: t.favIconUrl, alt: "" });
+  img.addEventListener("error", () => img.replaceWith(fallback));
+  return img;
+}
+
+function renderTabList(s) {
+  const list = el("div", { class: "tab-list" });
+  (s.tabs || []).forEach((t, i) => {
+    const tabRow = el(
+      "div",
+      {
+        class: "tab",
+        title: `${t.url}\n${
+          s.open
+            ? "Click to focus this tab"
+            : "Click to open just this tab in the current window"
+        }`,
+        onclick: () =>
+          send({
+            type: "openTab",
+            sessionId: s.id,
+            tabIndex: i,
+            targetWindowId: currentWindowId,
+          }),
+      },
+      faviconEl(t),
+      t.pinned ? el("span", { class: "pin", title: "Pinned" }, "📌") : null,
+      el("span", { class: "tab-title" }, t.title || t.url)
+    );
+    list.append(tabRow);
+  });
+  if (!list.children.length) {
+    list.append(el("div", { class: "tab none" }, "No tabs saved yet"));
+  }
+  return list;
+}
+
+/* ---------------- top-level ---------------- */
+
+function render() {
+  renderCurrentWindow();
+  renderSessions();
+}
+
+async function refresh() {
+  state = await send({ type: "getState" });
+  // Drop transient UI state for sessions that vanished.
+  if (editingSessionId && !state.sessions.some((s) => s.id === editingSessionId)) {
+    editingSessionId = null;
+  }
+  for (const id of expandedSessions) {
+    if (!state.sessions.some((s) => s.id === id)) expandedSessions.delete(id);
+  }
+  render();
+}
+
+browser.runtime.onMessage.addListener((msg) => {
+  if (msg && msg.type === "stateChanged") refresh();
+});
+
+$("#open-options").addEventListener("click", () =>
+  browser.runtime.openOptionsPage()
+);
+$("#save-now").addEventListener("click", () => send({ type: "saveNow" }));
+
+(async function init() {
+  const win = await browser.windows.getCurrent();
+  currentWindowId = win.id;
+  await refresh();
+})();

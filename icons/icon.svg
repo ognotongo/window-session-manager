@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- back window -->
+  <rect x="8" y="4" width="20" height="15" rx="2" fill="#8fb8e8"/>
+  <rect x="8" y="4" width="20" height="4" rx="2" fill="#5a8fce"/>
+  <!-- front window -->
+  <rect x="4" y="11" width="20" height="16" rx="2" fill="#3b7dd8" stroke="#fff" stroke-width="1.2"/>
+  <rect x="4" y="11" width="20" height="5" rx="2" fill="#1f5cb0"/>
+  <!-- tab dots -->
+  <circle cx="7.5" cy="13.5" r="1.2" fill="#fff"/>
+  <circle cx="11" cy="13.5" r="1.2" fill="#cfe2f7"/>
+  <circle cx="14.5" cy="13.5" r="1.2" fill="#cfe2f7"/>
+  <!-- open indicator -->
+  <circle cx="25" cy="25" r="5" fill="#2ac3a2" stroke="#fff" stroke-width="1.5"/>
+</svg>

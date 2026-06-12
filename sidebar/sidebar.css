@@ -1,0 +1,233 @@
+:root {
+  --bg: #ffffff;
+  --fg: #15141a;
+  --fg-dim: #5b5b66;
+  --border: #d7d7db;
+  --card: #f5f5f7;
+  --accent: #0061e0;
+  --accent-fg: #ffffff;
+  --open: #2ac3a2;
+  --closed: #b1b1b9;
+  --danger: #d7264c;
+  --hover: rgba(0, 0, 0, 0.06);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #23222b;
+    --fg: #fbfbfe;
+    --fg-dim: #bfbfc9;
+    --border: #3f3f4a;
+    --card: #2b2a33;
+    --accent: #00ddff;
+    --accent-fg: #15141a;
+    --open: #3fe1b0;
+    --closed: #6f6f7e;
+    --danger: #ff848c;
+    --hover: rgba(255, 255, 255, 0.08);
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+header h1 {
+  flex: 1;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.icon-btn {
+  background: none;
+  border: none;
+  color: var(--fg-dim);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 5px;
+  border-radius: 4px;
+}
+.icon-btn:hover { background: var(--hover); color: var(--fg); }
+.icon-btn.danger:hover { color: var(--danger); }
+
+.card {
+  margin: 8px;
+  padding: 8px 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.card .label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-dim);
+  margin-bottom: 4px;
+}
+
+.card .row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+button.primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: none;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+button.primary:hover { filter: brightness(1.1); }
+
+button.secondary {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  padding: 4px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+button.secondary:hover { background: var(--hover); }
+
+input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font: inherit;
+}
+input[type="text"]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+#session-list { padding: 4px 8px 12px; }
+
+.list-heading {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-dim);
+  margin: 10px 4px 4px;
+}
+
+.session {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.session:hover { background: var(--hover); }
+
+.dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--closed);
+}
+.session.open .dot { background: var(--open); box-shadow: 0 0 4px var(--open); }
+
+.session .info { flex: 1; min-width: 0; }
+
+.session .name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session .meta {
+  font-size: 11px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session .actions {
+  display: none;
+  flex: none;
+  gap: 2px;
+}
+.session:hover .actions,
+.session.editing .actions { display: flex; }
+
+.session .chevron {
+  flex: none;
+  width: 18px;
+  padding: 2px 0;
+  text-align: center;
+  font-size: 11px;
+}
+
+.tab-list {
+  margin: 0 0 4px 22px;
+  border-left: 1px solid var(--border);
+  padding-left: 4px;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.tab:hover { background: var(--hover); }
+.tab.none { color: var(--fg-dim); cursor: default; }
+.tab.none:hover { background: none; }
+
+.favicon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+}
+.favicon.fallback {
+  background: var(--closed);
+  opacity: 0.45;
+  border-radius: 50%;
+  width: 10px;
+  height: 10px;
+  margin: 2px;
+}
+
+.tab .pin { flex: none; font-size: 10px; }
+
+.tab-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+
+.empty {
+  margin: 16px 8px;
+  color: var(--fg-dim);
+  text-align: center;
+}
