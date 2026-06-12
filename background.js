@@ -171,6 +171,27 @@ async function trackWindow(windowId, name) {
   return sessions[id];
 }
 
+async function trackAllWindows() {
+  const wins = await browser.windows.getAll({ windowTypes: ["normal"] });
+  const usedNames = new Set(Object.values(sessions).map((s) => s.name));
+  let tracked = 0;
+  for (const win of wins) {
+    if (win.incognito) continue; // never persist private windows to disk
+    if (windowToSession.has(win.id)) continue;
+    const suggested = await getSuggestedName(win.id).catch(() => null);
+    let name = suggested || `Session ${new Date().toLocaleString()}`;
+    if (usedNames.has(name)) {
+      let n = 2;
+      while (usedNames.has(`${name} (${n})`)) n++;
+      name = `${name} (${n})`;
+    }
+    usedNames.add(name);
+    await trackWindow(win.id, name);
+    tracked++;
+  }
+  return { tracked };
+}
+
 async function untrackWindow(windowId) {
   const sessionId = windowToSession.get(windowId);
   if (!sessionId) return;
@@ -526,6 +547,8 @@ browser.runtime.onMessage.addListener((msg) => {
       return getSuggestedName(msg.windowId);
     case "trackWindow":
       return trackWindow(msg.windowId, msg.name);
+    case "trackAllWindows":
+      return trackAllWindows();
     case "untrackWindow":
       return untrackWindow(msg.windowId);
     case "openSession":

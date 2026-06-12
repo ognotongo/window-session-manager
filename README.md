@@ -39,6 +39,9 @@ works too: `npx web-ext run` from this directory.
 - **Restart-proof**: Tracked windows are tagged via the `sessions` API, so if
   Firefox restarts and restores your windows (or you use *Reopen Closed
   Window*), they are re-associated with their sessions automatically.
+- **Track all**: the ➕ button in the sidebar header tracks every currently
+  untracked window at once, naming each from its Window Titler preface when
+  present (timestamped fallback otherwise). Private windows are skipped.
 - **Auto-track new windows** (off by default, see Options): every new window
   becomes a session automatically. The name comes from the Window Titler
   preface when present (checked ~1.5 s after the window opens, to give Window
