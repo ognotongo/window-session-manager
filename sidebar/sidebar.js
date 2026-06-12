@@ -193,6 +193,7 @@ function renderSession(s) {
       ? "Click to focus this window"
       : "Click to reopen this session in a new window",
     onclick: () => send({ type: "openSession", sessionId: s.id }),
+    oncontextmenu: (e) => showContextMenu(e, s),
   });
 
   row.append(
@@ -328,6 +329,76 @@ function renderTabList(s) {
     list.append(el("div", { class: "tab none" }, "No tabs saved yet"));
   }
   return list;
+}
+
+/* ---------------- context menu ---------------- */
+
+function closeContextMenu() {
+  const menu = document.getElementById("context-menu");
+  if (menu) menu.remove();
+}
+
+function showContextMenu(e, s) {
+  e.preventDefault();
+  e.stopPropagation();
+  closeContextMenu();
+
+  const item = (label, onclick) =>
+    el(
+      "div",
+      {
+        class: "menu-item",
+        onclick: (ev) => {
+          ev.stopPropagation();
+          closeContextMenu();
+          onclick();
+        },
+      },
+      label
+    );
+
+  const menu = el(
+    "div",
+    { class: "context-menu", id: "context-menu" },
+    item(s.open ? "Close session" : "Open session", () =>
+      send({ type: s.open ? "closeSession" : "openSession", sessionId: s.id })
+    ),
+    item("Export session…", () => exportSessionToFile(s.id))
+  );
+  document.body.append(menu);
+
+  // Clamp to the viewport — sidebars are narrow.
+  const rect = menu.getBoundingClientRect();
+  let x = e.clientX;
+  let y = e.clientY;
+  if (x + rect.width > window.innerWidth) x = window.innerWidth - rect.width - 4;
+  if (y + rect.height > window.innerHeight) y = window.innerHeight - rect.height - 4;
+  menu.style.left = `${Math.max(0, x)}px`;
+  menu.style.top = `${Math.max(0, y)}px`;
+}
+
+document.addEventListener("click", closeContextMenu);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeContextMenu();
+});
+window.addEventListener("blur", closeContextMenu);
+
+async function exportSessionToFile(sessionId) {
+  const data = await send({ type: "exportSession", sessionId });
+  const name = (data.sessions[0] && data.sessions[0].name) || "session";
+  const slug = name.replace(/[^\w-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40) || "session";
+  const blob = new Blob([JSON.stringify(data, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = el("a", {
+    href: url,
+    download: `session-${slug}-${new Date().toISOString().slice(0, 10)}.json`,
+  });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
 /* ---------------- top-level ---------------- */

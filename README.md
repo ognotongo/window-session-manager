@@ -60,6 +60,10 @@ works too: `npx web-ext run` from this directory.
   pinned marker, title). Clicking a tab in an **open** session focuses that
   tab; in a **closed** session it opens just that tab in the current window
   without restoring the whole session.
+- **Right-click menu**: right-clicking a session offers *Close session* /
+  *Open session* (depending on its state — closing takes a final snapshot
+  first) and *Export session…*, which downloads just that session as a JSON
+  file that the importer accepts.
 - **Export / import** (in Options): export downloads all sessions as a JSON
   file; import merges them back as closed sessions. Re-importing the same
   file updates sessions in place rather than duplicating, and never

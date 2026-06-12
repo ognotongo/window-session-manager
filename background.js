@@ -268,13 +268,23 @@ async function deleteSession(sessionId) {
 
 /* ---------------- export / import ---------------- */
 
-function exportSessions() {
+function makeExportEnvelope(list) {
   return {
     format: "window-session-manager",
     version: 1,
     exportedAt: new Date().toISOString(),
-    sessions: Object.values(sessions),
+    sessions: list,
   };
+}
+
+function exportSessions() {
+  return makeExportEnvelope(Object.values(sessions));
+}
+
+function exportOneSession(sessionId) {
+  const session = sessions[sessionId];
+  if (!session) throw new Error("Unknown session");
+  return makeExportEnvelope([session]);
 }
 
 function sanitizeImportedTab(t) {
@@ -402,6 +412,18 @@ async function openSession(sessionId) {
   await browser.tabs.remove(placeholderId).catch(() => {});
   await snapshotWindow(win.id);
   broadcast();
+}
+
+/*
+ * Close an open session's window. A final snapshot is taken first in case a
+ * debounced save is still pending; windows.onRemoved then marks the session
+ * closed as usual.
+ */
+async function closeSession(sessionId) {
+  const session = sessions[sessionId];
+  if (!session || !session.open || session.windowId == null) return;
+  await snapshotWindow(session.windowId).catch(() => {});
+  await browser.windows.remove(session.windowId).catch(() => {});
 }
 
 /*
@@ -602,8 +624,12 @@ browser.runtime.onMessage.addListener((msg) => {
       return snapshotAllTracked();
     case "openTab":
       return openSingleTab(msg.sessionId, msg.tabIndex, msg.targetWindowId);
+    case "closeSession":
+      return closeSession(msg.sessionId);
     case "exportSessions":
       return Promise.resolve(exportSessions());
+    case "exportSession":
+      return Promise.resolve(exportOneSession(msg.sessionId));
     case "importSessions":
       return importSessions(msg.data);
   }
