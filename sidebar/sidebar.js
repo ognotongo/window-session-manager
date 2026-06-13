@@ -401,6 +401,34 @@ async function exportSessionToFile(sessionId) {
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
+/* ---------------- import ---------------- */
+
+let toastTimer = null;
+
+function showToast(text, isError) {
+  const toast = $("#toast");
+  toast.textContent = text;
+  toast.classList.toggle("error", !!isError);
+  toast.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toast.hidden = true;
+  }, 5000);
+}
+
+async function importFromFile(file) {
+  try {
+    const data = JSON.parse(await file.text());
+    const result = await send({ type: "importSessions", data });
+    showToast(
+      `Imported ${result.imported} of ${result.total} session(s).`,
+      false
+    );
+  } catch (e) {
+    showToast(`Import failed: ${e.message}`, true);
+  }
+}
+
 /* ---------------- top-level ---------------- */
 
 function render() {
@@ -431,6 +459,13 @@ $("#save-now").addEventListener("click", () => send({ type: "saveNow" }));
 $("#track-all").addEventListener("click", () =>
   send({ type: "trackAllWindows" })
 );
+$("#import").addEventListener("click", () => $("#import-file").click());
+$("#import-file").addEventListener("change", () => {
+  const input = $("#import-file");
+  const file = input.files[0];
+  input.value = ""; // allow re-selecting the same file
+  if (file) importFromFile(file);
+});
 
 (async function init() {
   const win = await browser.windows.getCurrent();

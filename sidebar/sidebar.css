@@ -233,6 +233,16 @@ input[type="text"]:focus { outline: 2px solid var(--accent); outline-offset: -1p
   text-align: center;
 }
 
+#toast {
+  margin: 8px 8px 0;
+  padding: 6px 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+#toast.error { color: var(--danger); border-color: var(--danger); }
+
 .context-menu {
   position: fixed;
   z-index: 100;
