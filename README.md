@@ -81,6 +81,10 @@ works too: `npx web-ext run` from this directory.
 - The Window Titler name is read when you *start tracking*; renaming the
   window later does not rename the session (use the sidebar's ✎ button).
 
+## License
+
+[Mozilla Public License 2.0](LICENSE).
+
 ## Ideas / future work
 
 - Keyboard shortcut (`commands` manifest key) to save or open the sidebar.
