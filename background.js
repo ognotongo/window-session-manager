@@ -162,6 +162,25 @@ function clearTitlePreface(windowId) {
   browser.windows.update(windowId, { titlePreface: "" }).catch(() => {});
 }
 
+const TITLE_PREFACE_REAPPLY_MS = 2000;
+
+/*
+ * On freshly created windows, other actors can overwrite the preface we just
+ * set — Window Titler reacts to windows.onCreated and applies its stored
+ * (usually empty) preface for the new window. Apply now and once more after
+ * a short delay so we end up the last writer. The name is re-read at fire
+ * time in case the session was renamed or untracked in between.
+ */
+function applyTitlePrefacePersistent(windowId) {
+  const apply = () => {
+    const sessionId = windowToSession.get(windowId);
+    const session = sessionId && sessions[sessionId];
+    if (session) applyTitlePreface(windowId, session.name);
+  };
+  apply();
+  setTimeout(apply, TITLE_PREFACE_REAPPLY_MS);
+}
+
 /* ---------------- tracking ---------------- */
 
 function newSessionId() {
@@ -371,7 +390,7 @@ async function openSession(sessionId) {
   await browser.sessions
     .setWindowValue(win.id, WINDOW_VALUE_KEY, sessionId)
     .catch(() => {});
-  applyTitlePreface(win.id, session.name);
+  applyTitlePrefacePersistent(win.id);
 
   for (let i = 0; i < tabs.length; i++) {
     const t = tabs[i];
@@ -483,7 +502,7 @@ async function associateWindow(win) {
     sessions[sessionId].open = true;
     sessions[sessionId].windowId = win.id;
     windowToSession.set(win.id, sessionId);
-    applyTitlePreface(win.id, sessions[sessionId].name);
+    applyTitlePrefacePersistent(win.id);
     scheduleSnapshot(win.id);
   }
 }
