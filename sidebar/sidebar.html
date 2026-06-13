@@ -8,9 +8,13 @@
   <header>
     <h1>Sessions</h1>
     <button id="track-all" class="icon-btn" title="Track all untracked windows">&#x2795;</button>
+    <button id="import" class="icon-btn" title="Import sessions from a JSON export">&#x1F4C2;</button>
     <button id="save-now" class="icon-btn" title="Save all open sessions now">&#x1F4BE;</button>
     <button id="open-options" class="icon-btn" title="Options">&#x2699;</button>
+    <input type="file" id="import-file" accept=".json,application/json" hidden />
   </header>
+
+  <div id="toast" hidden></div>
 
   <section id="current-window" class="card">
     <!-- filled by sidebar.js -->

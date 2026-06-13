@@ -162,6 +162,25 @@ function clearTitlePreface(windowId) {
   browser.windows.update(windowId, { titlePreface: "" }).catch(() => {});
 }
 
+const TITLE_PREFACE_REAPPLY_MS = 2000;
+
+/*
+ * On freshly created windows, other actors can overwrite the preface we just
+ * set — Window Titler reacts to windows.onCreated and applies its stored
+ * (usually empty) preface for the new window. Apply now and once more after
+ * a short delay so we end up the last writer. The name is re-read at fire
+ * time in case the session was renamed or untracked in between.
+ */
+function applyTitlePrefacePersistent(windowId) {
+  const apply = () => {
+    const sessionId = windowToSession.get(windowId);
+    const session = sessionId && sessions[sessionId];
+    if (session) applyTitlePreface(windowId, session.name);
+  };
+  apply();
+  setTimeout(apply, TITLE_PREFACE_REAPPLY_MS);
+}
+
 /* ---------------- tracking ---------------- */
 
 function newSessionId() {
@@ -268,13 +287,23 @@ async function deleteSession(sessionId) {
 
 /* ---------------- export / import ---------------- */
 
-function exportSessions() {
+function makeExportEnvelope(list) {
   return {
     format: "window-session-manager",
     version: 1,
     exportedAt: new Date().toISOString(),
-    sessions: Object.values(sessions),
+    sessions: list,
   };
+}
+
+function exportSessions() {
+  return makeExportEnvelope(Object.values(sessions));
+}
+
+function exportOneSession(sessionId) {
+  const session = sessions[sessionId];
+  if (!session) throw new Error("Unknown session");
+  return makeExportEnvelope([session]);
 }
 
 function sanitizeImportedTab(t) {
@@ -361,7 +390,7 @@ async function openSession(sessionId) {
   await browser.sessions
     .setWindowValue(win.id, WINDOW_VALUE_KEY, sessionId)
     .catch(() => {});
-  applyTitlePreface(win.id, session.name);
+  applyTitlePrefacePersistent(win.id);
 
   for (let i = 0; i < tabs.length; i++) {
     const t = tabs[i];
@@ -402,6 +431,18 @@ async function openSession(sessionId) {
   await browser.tabs.remove(placeholderId).catch(() => {});
   await snapshotWindow(win.id);
   broadcast();
+}
+
+/*
+ * Close an open session's window. A final snapshot is taken first in case a
+ * debounced save is still pending; windows.onRemoved then marks the session
+ * closed as usual.
+ */
+async function closeSession(sessionId) {
+  const session = sessions[sessionId];
+  if (!session || !session.open || session.windowId == null) return;
+  await snapshotWindow(session.windowId).catch(() => {});
+  await browser.windows.remove(session.windowId).catch(() => {});
 }
 
 /*
@@ -461,7 +502,7 @@ async function associateWindow(win) {
     sessions[sessionId].open = true;
     sessions[sessionId].windowId = win.id;
     windowToSession.set(win.id, sessionId);
-    applyTitlePreface(win.id, sessions[sessionId].name);
+    applyTitlePrefacePersistent(win.id);
     scheduleSnapshot(win.id);
   }
 }
@@ -602,8 +643,12 @@ browser.runtime.onMessage.addListener((msg) => {
       return snapshotAllTracked();
     case "openTab":
       return openSingleTab(msg.sessionId, msg.tabIndex, msg.targetWindowId);
+    case "closeSession":
+      return closeSession(msg.sessionId);
     case "exportSessions":
       return Promise.resolve(exportSessions());
+    case "exportSession":
+      return Promise.resolve(exportOneSession(msg.sessionId));
     case "importSessions":
       return importSessions(msg.data);
   }

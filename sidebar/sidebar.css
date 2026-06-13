@@ -232,3 +232,32 @@ input[type="text"]:focus { outline: 2px solid var(--accent); outline-offset: -1p
   color: var(--fg-dim);
   text-align: center;
 }
+
+#toast {
+  margin: 8px 8px 0;
+  padding: 6px 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+#toast.error { color: var(--danger); border-color: var(--danger); }
+
+.context-menu {
+  position: fixed;
+  z-index: 100;
+  min-width: 150px;
+  padding: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.menu-item {
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.menu-item:hover { background: var(--hover); }
