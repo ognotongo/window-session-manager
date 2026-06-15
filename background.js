@@ -5,42 +5,82 @@
 "use strict";
 
 /*
- * Window Session Manager — background script.
+ * Window Session Manager — background.
  *
- * Core idea: a "session" is one window plus its tabs. Because Firefox gives us
- * no way to enumerate a window's tabs *after* it closes, we snapshot tracked
- * windows continuously (debounced on tab events, plus a periodic timer). The
- * windows.onRemoved handler then only has to flip the session to "closed" —
+ * Core idea: a "session" is one window plus its tabs. Because the browser
+ * gives us no way to enumerate a window's tabs *after* it closes, we snapshot
+ * tracked windows continuously (debounced on tab events, plus a periodic
+ * alarm). windows.onRemoved then only has to flip the session to "closed" —
  * the tab list is already saved.
+ *
+ * Lifecycle note (MV3): this runs as a Chrome/Edge service worker or a
+ * Firefox event page, both of which are suspended when idle and lose all
+ * in-memory state. Nothing here may assume it survives between events:
+ *   - storage.local is the source of truth; the in-memory `sessions`/`options`
+ *     are a cache rebuilt on each wake via ensureReady().
+ *   - `windowToSession` is derived state, rebuilt from live windows on wake.
+ *   - the periodic save uses alarms (which survive suspension), never
+ *     setInterval. The short per-event setTimeout debounce is best-effort and
+ *     backed up by the alarm.
+ *
+ * Cross-browser note: Firefox-only capabilities are feature-detected and
+ * gated, so the same file runs on Chromium (Edge) where they are absent:
+ *   - window title preface (Window Titler integration)
+ *   - sessions.{get,set,remove}WindowValue (restart re-association)
+ *   - container tabs (cookieStoreId) and discarded-tab creation
  */
 
+const browser = globalThis.browser || globalThis.chrome;
+
+// Capability probes. getBrowserInfo is Firefox-only; setWindowValue is the
+// sessions-API extension Chromium lacks.
+const isFirefox = typeof browser.runtime.getBrowserInfo === "function";
+const hasWindowValues = !!(
+  browser.sessions && browser.sessions.setWindowValue
+);
+
 const DEFAULT_OPTIONS = {
-  // Derive session names from the window title preface (what Window Titler sets).
+  // Derive session names from the window title preface (what Window Titler
+  // sets). Firefox only.
   useWindowTitler: true,
-  // Extra periodic snapshot of all tracked windows, in seconds. 0 disables.
+  // Periodic snapshot of all tracked windows, in seconds. 0 disables. Clamped
+  // up to the browser's alarm minimum (see ALARM_MIN_SECONDS).
   periodicSaveSecs: 30,
   // Turn every new (non-private) window into a session automatically.
   autoTrackNewWindows: false,
   // Write the session name into the window title (titlePreface) on track,
-  // rename, and restore — the same mechanism Window Titler uses.
+  // rename, and restore — the same mechanism Window Titler uses. Firefox only.
   setTitlePreface: true,
 };
 
 const SNAPSHOT_DEBOUNCE_MS = 750;
 const WINDOW_VALUE_KEY = "wsmSessionId";
+const PERIODIC_ALARM = "wsm-periodic-save";
+// Both engines clamp alarm periods to a floor (~30s Chrome, ~60s Firefox);
+// use the larger so behavior matches the configured value where possible.
+const ALARM_MIN_SECONDS = 60;
 
 let options = { ...DEFAULT_OPTIONS };
 let sessions = {};                 // sessionId -> session record
-const windowToSession = new Map(); // windowId  -> sessionId
+const windowToSession = new Map(); // windowId  -> sessionId (derived)
 const snapshotTimers = new Map();  // windowId  -> debounce timeout id
-let periodicTimer = null;
 
-/* ---------------- persistence ---------------- */
+/* ---------------- readiness / state rebuild ---------------- */
 
-async function loadState() {
+// Memoized per background lifetime: loads cached state and rebuilds the
+// window->session map exactly once per wake. Every event handler awaits this
+// before touching state.
+let readyPromise = null;
+function ensureReady() {
+  if (!readyPromise) readyPromise = rebuildState();
+  return readyPromise;
+}
+
+async function rebuildState() {
   const stored = await browser.storage.local.get(["options", "sessions"]);
   options = { ...DEFAULT_OPTIONS, ...(stored.options || {}) };
   sessions = stored.sessions || {};
+  await reconcileWindows();
 }
 
 async function persistSessions() {
@@ -48,8 +88,57 @@ async function persistSessions() {
 }
 
 function broadcast() {
-  // Tell any open sidebars to re-render. Rejects when none are open; ignore.
+  // Tell any open sidebars/panels to re-render. Rejects when none are open.
   browser.runtime.sendMessage({ type: "stateChanged" }).catch(() => {});
+}
+
+/*
+ * Rebuild windowToSession from the set of live windows. Used on every wake
+ * (state was lost) and after a browser restart (window ids changed). On
+ * Firefox we recover the association from the per-window value we stored; on
+ * Chromium, which has no window values, we fall back to matching the windowId
+ * recorded on the session — valid within a browser session but not across a
+ * restart, where those ids are stale and the sessions become closed.
+ */
+async function reconcileWindows() {
+  windowToSession.clear();
+  let wins = [];
+  try {
+    wins = await browser.windows.getAll();
+  } catch (e) {
+    wins = [];
+  }
+  const claimed = new Set();
+  for (const win of wins) {
+    if (win.type && win.type !== "normal") continue;
+    let sessionId = null;
+    if (hasWindowValues) {
+      sessionId = await browser.sessions
+        .getWindowValue(win.id, WINDOW_VALUE_KEY)
+        .catch(() => null);
+    }
+    if (!sessionId) {
+      const match = Object.values(sessions).find(
+        (s) => s.open && s.windowId === win.id
+      );
+      if (match) sessionId = match.id;
+    }
+    if (!sessionId || !sessions[sessionId] || claimed.has(sessionId)) continue;
+    claimed.add(sessionId);
+    sessions[sessionId].open = true;
+    sessions[sessionId].windowId = win.id;
+    windowToSession.set(win.id, sessionId);
+    applyTitlePreface(win.id, sessions[sessionId].name);
+  }
+  // Anything not matched to a live window is a closed session.
+  for (const session of Object.values(sessions)) {
+    if (!claimed.has(session.id)) {
+      session.open = false;
+      session.windowId = null;
+    }
+  }
+  await persistSessions();
+  broadcast();
 }
 
 /* ---------------- snapshots ---------------- */
@@ -98,14 +187,11 @@ async function snapshotAllTracked() {
   }
 }
 
-function restartPeriodicTimer() {
-  clearInterval(periodicTimer);
-  periodicTimer = null;
+function setupPeriodicAlarm() {
+  browser.alarms.clear(PERIODIC_ALARM).catch(() => {});
   if (options.periodicSaveSecs > 0) {
-    periodicTimer = setInterval(
-      () => snapshotAllTracked(),
-      options.periodicSaveSecs * 1000
-    );
+    const seconds = Math.max(options.periodicSaveSecs, ALARM_MIN_SECONDS);
+    browser.alarms.create(PERIODIC_ALARM, { periodInMinutes: seconds / 60 });
   }
 }
 
@@ -116,9 +202,10 @@ function restartPeriodicTimer() {
  * setting the window's titlePreface — and that preface is visible in
  * windows.Window.title (with the "tabs" permission). Recover it by stripping
  * the browser-name suffix and the active tab's title from the window title.
+ * Firefox only: Chromium windows expose no title.
  */
 async function getSuggestedName(windowId) {
-  if (!options.useWindowTitler) return null;
+  if (!isFirefox || !options.useWindowTitler) return null;
   let win;
   try {
     win = await browser.windows.get(windowId, { populate: true });
@@ -151,18 +238,18 @@ async function getSuggestedName(windowId) {
 
 /*
  * Note: this competes with Window Titler for the same titlePreface — last
- * writer wins. We deliberately take it over for tracked windows; Window
- * Titler may reapply its own stored name on browser restart if the window
- * was also named there.
+ * writer wins. We deliberately take it over for tracked windows. No-op on
+ * Chromium, which does not let extensions set window titles.
  */
 function applyTitlePreface(windowId, name) {
-  if (!options.setTitlePreface) return;
+  if (!isFirefox || !options.setTitlePreface) return;
   browser.windows
     .update(windowId, { titlePreface: name ? `[${name}] ` : "" })
     .catch(() => {});
 }
 
 function clearTitlePreface(windowId) {
+  if (!isFirefox) return;
   browser.windows.update(windowId, { titlePreface: "" }).catch(() => {});
 }
 
@@ -182,7 +269,9 @@ function applyTitlePrefacePersistent(windowId) {
     if (session) applyTitlePreface(windowId, session.name);
   };
   apply();
-  setTimeout(apply, TITLE_PREFACE_REAPPLY_MS);
+  if (isFirefox && options.setTitlePreface) {
+    setTimeout(apply, TITLE_PREFACE_REAPPLY_MS);
+  }
 }
 
 /* ---------------- tracking ---------------- */
@@ -207,10 +296,12 @@ async function trackWindow(windowId, name) {
   };
   windowToSession.set(windowId, id);
   // Tag the window so we can re-associate it after a browser restart or an
-  // undo-close-window restore.
-  await browser.sessions
-    .setWindowValue(windowId, WINDOW_VALUE_KEY, id)
-    .catch(() => {});
+  // undo-close-window restore (Firefox only).
+  if (hasWindowValues) {
+    await browser.sessions
+      .setWindowValue(windowId, WINDOW_VALUE_KEY, id)
+      .catch(() => {});
+  }
   applyTitlePreface(windowId, sessions[id].name);
   await snapshotWindow(windowId);
   broadcast();
@@ -250,9 +341,11 @@ async function untrackWindow(windowId) {
     session.open = false;
     session.windowId = null;
   }
-  await browser.sessions
-    .removeWindowValue(windowId, WINDOW_VALUE_KEY)
-    .catch(() => {});
+  if (hasWindowValues) {
+    await browser.sessions
+      .removeWindowValue(windowId, WINDOW_VALUE_KEY)
+      .catch(() => {});
+  }
   // Only clear a preface we set ourselves; with the option off the preface
   // may belong to Window Titler.
   if (options.setTitlePreface) clearTitlePreface(windowId);
@@ -391,9 +484,11 @@ async function openSession(sessionId) {
   session.open = true;
   session.windowId = win.id;
   windowToSession.set(win.id, sessionId);
-  await browser.sessions
-    .setWindowValue(win.id, WINDOW_VALUE_KEY, sessionId)
-    .catch(() => {});
+  if (hasWindowValues) {
+    await browser.sessions
+      .setWindowValue(win.id, WINDOW_VALUE_KEY, sessionId)
+      .catch(() => {});
+  }
   applyTitlePrefacePersistent(win.id);
 
   for (let i = 0; i < tabs.length; i++) {
@@ -406,16 +501,17 @@ async function openSession(sessionId) {
     };
     if (i === activeIndex) {
       props.active = true;
-    } else if (/^https?:/i.test(t.url)) {
+    } else if (isFirefox && /^https?:/i.test(t.url)) {
       // Lazy-load everything except the active tab: the page stays unloaded
-      // (showing its saved title) until the user clicks it.
+      // (showing its saved title) until the user clicks it. Firefox only —
+      // Chromium's tabs.create rejects `discarded`/`title`.
       props.active = false;
       props.discarded = true;
       if (t.title) props.title = t.title;
     } else {
       props.active = false;
     }
-    if (t.cookieStoreId && t.cookieStoreId !== "firefox-default") {
+    if (isFirefox && t.cookieStoreId && t.cookieStoreId !== "firefox-default") {
       props.cookieStoreId = t.cookieStoreId;
     }
     try {
@@ -474,7 +570,7 @@ async function openSingleTab(sessionId, tabIndex, targetWindowId) {
   if (!isRestorableUrl(saved.url)) return;
   const props = { url: saved.url, active: true };
   if (targetWindowId != null) props.windowId = targetWindowId;
-  if (saved.cookieStoreId && saved.cookieStoreId !== "firefox-default") {
+  if (isFirefox && saved.cookieStoreId && saved.cookieStoreId !== "firefox-default") {
     props.cookieStoreId = saved.cookieStoreId;
   }
   try {
@@ -485,53 +581,37 @@ async function openSingleTab(sessionId, tabIndex, targetWindowId) {
   }
 }
 
-/* ---------------- window (re-)association ---------------- */
+/* ---------------- auto-track ---------------- */
 
-async function associateWindow(win) {
+const AUTO_TRACK_DELAY_MS = 1500;
+
+function maybeAutoTrack(win) {
+  if (!options.autoTrackNewWindows) return;
   if (win.type && win.type !== "normal") return;
-  const sessionId = await browser.sessions
-    .getWindowValue(win.id, WINDOW_VALUE_KEY)
-    .catch(() => null);
-  if (sessionId && sessions[sessionId]) {
-    // Another live window may already own this session (e.g. duplicated
-    // restore); first one wins.
-    if (
-      sessions[sessionId].open &&
-      sessions[sessionId].windowId != null &&
-      windowToSession.has(sessions[sessionId].windowId) &&
-      sessions[sessionId].windowId !== win.id
-    ) {
-      return;
+  if (win.incognito) return; // never persist private windows to disk
+  // The delay lets openSession()/session restore claim the window first, and
+  // gives Window Titler time to apply its title preface.
+  setTimeout(async () => {
+    await ensureReady();
+    if (!options.autoTrackNewWindows) return;
+    if (windowToSession.has(win.id)) return;
+    try {
+      await browser.windows.get(win.id);
+    } catch (e) {
+      return; // window already closed again
     }
-    sessions[sessionId].open = true;
-    sessions[sessionId].windowId = win.id;
-    windowToSession.set(win.id, sessionId);
-    applyTitlePrefacePersistent(win.id);
-    scheduleSnapshot(win.id);
-  }
-}
-
-async function reconcileOnStartup() {
-  const wins = await browser.windows.getAll();
-  for (const win of wins) {
-    await associateWindow(win);
-  }
-  // Anything not matched to a live window is a closed session.
-  const openIds = new Set(windowToSession.values());
-  for (const session of Object.values(sessions)) {
-    if (!openIds.has(session.id)) {
-      session.open = false;
-      session.windowId = null;
-    }
-  }
-  await persistSessions();
-  broadcast();
+    const suggested = await getSuggestedName(win.id).catch(() => null);
+    const name = suggested || `Session ${new Date().toLocaleString()}`;
+    await trackWindow(win.id, name);
+  }, AUTO_TRACK_DELAY_MS);
 }
 
 /* ---------------- event wiring ---------------- */
 
-function onTabEvent(windowId) {
-  if (windowId != null) scheduleSnapshot(windowId);
+async function onTabEvent(windowId) {
+  if (windowId == null) return;
+  await ensureReady();
+  scheduleSnapshot(windowId);
 }
 
 browser.tabs.onCreated.addListener((tab) => onTabEvent(tab.windowId));
@@ -558,37 +638,31 @@ try {
   });
 }
 
-browser.windows.onCreated.addListener((win) => {
-  // Re-link windows restored via "Reopen Closed Window" / session restore.
-  associateWindow(win)
-    .then(() => persistSessions())
-    .then(broadcast)
-    .then(() => maybeAutoTrack(win));
+browser.windows.onCreated.addListener(async (win) => {
+  await ensureReady();
+  // Re-link windows restored via "Reopen Closed Window" / session restore,
+  // then consider auto-tracking brand-new ones.
+  if (!win.type || win.type === "normal") {
+    const sessionId = hasWindowValues
+      ? await browser.sessions
+          .getWindowValue(win.id, WINDOW_VALUE_KEY)
+          .catch(() => null)
+      : null;
+    if (sessionId && sessions[sessionId] && !windowToSession.has(win.id)) {
+      sessions[sessionId].open = true;
+      sessions[sessionId].windowId = win.id;
+      windowToSession.set(win.id, sessionId);
+      applyTitlePrefacePersistent(win.id);
+      scheduleSnapshot(win.id);
+      await persistSessions();
+      broadcast();
+    }
+  }
+  maybeAutoTrack(win);
 });
 
-const AUTO_TRACK_DELAY_MS = 1500;
-
-function maybeAutoTrack(win) {
-  if (!options.autoTrackNewWindows) return;
-  if (win.type && win.type !== "normal") return;
-  if (win.incognito) return; // never persist private windows to disk
-  // The delay lets openSession()/session restore claim the window first, and
-  // gives Window Titler time to apply its title preface.
-  setTimeout(async () => {
-    if (!options.autoTrackNewWindows) return;
-    if (windowToSession.has(win.id)) return;
-    try {
-      await browser.windows.get(win.id);
-    } catch (e) {
-      return; // window already closed again
-    }
-    const suggested = await getSuggestedName(win.id).catch(() => null);
-    const name = suggested || `Session ${new Date().toLocaleString()}`;
-    await trackWindow(win.id, name);
-  }, AUTO_TRACK_DELAY_MS);
-}
-
 browser.windows.onRemoved.addListener(async (windowId) => {
+  await ensureReady();
   const sessionId = windowToSession.get(windowId);
   if (!sessionId) return;
   clearTimeout(snapshotTimers.get(windowId));
@@ -599,36 +673,55 @@ browser.windows.onRemoved.addListener(async (windowId) => {
   broadcast();
 });
 
-browser.browserAction.onClicked.addListener(() => {
-  browser.sidebarAction.open().catch(() => {});
+if (browser.action && browser.action.onClicked) {
+  browser.action.onClicked.addListener(() => {
+    // Firefox: open the sidebar. Chromium's side panel is wired separately.
+    if (browser.sidebarAction) browser.sidebarAction.open().catch(() => {});
+  });
+}
+
+browser.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== PERIODIC_ALARM) return;
+  await ensureReady();
+  await snapshotAllTracked();
 });
 
-browser.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && changes.options) {
-    const before = options;
-    options = { ...DEFAULT_OPTIONS, ...(changes.options.newValue || {}) };
-    restartPeriodicTimer();
-    if (before.setTitlePreface !== options.setTitlePreface) {
-      for (const [windowId, sessionId] of windowToSession) {
-        if (options.setTitlePreface) {
-          applyTitlePreface(windowId, sessions[sessionId] && sessions[sessionId].name);
-        } else {
-          clearTitlePreface(windowId);
-        }
+browser.storage.onChanged.addListener(async (changes, area) => {
+  if (area !== "local" || !changes.options) return;
+  await ensureReady();
+  const before = options;
+  options = { ...DEFAULT_OPTIONS, ...(changes.options.newValue || {}) };
+  setupPeriodicAlarm();
+  if (before.setTitlePreface !== options.setTitlePreface) {
+    for (const [windowId, sessionId] of windowToSession) {
+      if (options.setTitlePreface) {
+        applyTitlePreface(windowId, sessions[sessionId] && sessions[sessionId].name);
+      } else {
+        clearTitlePreface(windowId);
       }
     }
   }
 });
 
+browser.runtime.onInstalled.addListener(async () => {
+  await ensureReady();
+  setupPeriodicAlarm();
+});
+
+browser.runtime.onStartup.addListener(async () => {
+  await ensureReady();
+  setupPeriodicAlarm();
+});
+
 /* ---------------- sidebar / options API ---------------- */
 
-browser.runtime.onMessage.addListener((msg) => {
+browser.runtime.onMessage.addListener((msg) => handleMessage(msg));
+
+async function handleMessage(msg) {
+  await ensureReady();
   switch (msg && msg.type) {
     case "getState":
-      return Promise.resolve({
-        sessions: Object.values(sessions),
-        options,
-      });
+      return { sessions: Object.values(sessions), options };
     case "getSuggestedName":
       return getSuggestedName(msg.windowId);
     case "trackWindow":
@@ -650,19 +743,11 @@ browser.runtime.onMessage.addListener((msg) => {
     case "closeSession":
       return closeSession(msg.sessionId);
     case "exportSessions":
-      return Promise.resolve(exportSessions());
+      return exportSessions();
     case "exportSession":
-      return Promise.resolve(exportOneSession(msg.sessionId));
+      return exportOneSession(msg.sessionId);
     case "importSessions":
       return importSessions(msg.data);
   }
   return undefined;
-});
-
-/* ---------------- init ---------------- */
-
-(async function init() {
-  await loadState();
-  await reconcileOnStartup();
-  restartPeriodicTimer();
-})();
+}

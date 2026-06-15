@@ -4,6 +4,8 @@
 
 "use strict";
 
+const browser = globalThis.browser || globalThis.chrome;
+
 /*
  * Sidebar UI. Each sidebar instance belongs to one window, so it can show
  * whether *this* window is tracked, and offer to start tracking it.
