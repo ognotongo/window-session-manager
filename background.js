@@ -195,6 +195,17 @@ function setupPeriodicAlarm() {
   }
 }
 
+// Chromium/Edge: make the toolbar button open the side panel. No-op on
+// Firefox, which uses sidebar_action + the action.onClicked handler instead.
+// The API is reached through a local var (not browser.sidePanel.*) so the
+// Firefox-only web-ext linter doesn't flag this guarded Chromium call.
+function setupSidePanel() {
+  const sidePanel = browser["sidePanel"];
+  if (sidePanel && sidePanel.setPanelBehavior) {
+    sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+  }
+}
+
 /* ---------------- session naming (Window Titler integration) ---------------- */
 
 /*
@@ -706,16 +717,30 @@ browser.storage.onChanged.addListener(async (changes, area) => {
 browser.runtime.onInstalled.addListener(async () => {
   await ensureReady();
   setupPeriodicAlarm();
+  setupSidePanel();
 });
 
 browser.runtime.onStartup.addListener(async () => {
   await ensureReady();
   setupPeriodicAlarm();
+  setupSidePanel();
 });
 
 /* ---------------- sidebar / options API ---------------- */
 
-browser.runtime.onMessage.addListener((msg) => handleMessage(msg));
+browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // Use sendResponse + `return true` rather than returning the promise:
+  // Chrome/Edge's onMessage ignores a returned promise, so the promise-return
+  // pattern (which Firefox honors) would silently drop every response on Edge.
+  handleMessage(msg).then(
+    (result) => sendResponse(result),
+    (err) => {
+      console.error("Session manager message failed:", err);
+      sendResponse(undefined);
+    }
+  );
+  return true;
+});
 
 async function handleMessage(msg) {
   await ensureReady();
