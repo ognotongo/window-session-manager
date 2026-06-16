@@ -80,7 +80,7 @@ function renderCurrentWindow() {
           "button",
           {
             class: "secondary",
-            title: "Stop tracking this window. The session is kept as a closed snapshot.",
+            title: "Stop tracking this window and remove the session. The window stays open.",
             onclick: () => send({ type: "untrackWindow", windowId: currentWindowId }),
           },
           "Stop tracking"

@@ -329,25 +329,25 @@ async function trackAllWindows() {
   return { tracked };
 }
 
+/*
+ * Stop tracking a window: forget the session entirely (it disappears from the
+ * list) while leaving the window itself open. The window is untagged so it is
+ * not re-associated on the next wake.
+ */
 async function untrackWindow(windowId) {
   const sessionId = windowToSession.get(windowId);
   if (!sessionId) return;
-  await snapshotWindow(windowId).catch(() => {});
   windowToSession.delete(windowId);
   clearTimeout(snapshotTimers.get(windowId));
   snapshotTimers.delete(windowId);
-  const session = sessions[sessionId];
-  if (session) {
-    session.open = false;
-    session.windowId = null;
-  }
+  delete sessions[sessionId];
   if (hasWindowValues) {
     await browser.sessions
       .removeWindowValue(windowId, WINDOW_VALUE_KEY)
       .catch(() => {});
   }
-  // Only clear a preface we set ourselves; with the option off the preface
-  // may belong to Window Titler.
+  // Drop the preface we set; with the option off it may belong to Window
+  // Titler, so leave it alone.
   if (options.setTitlePreface) clearTitlePreface(windowId);
   await persistSessions();
   broadcast();
