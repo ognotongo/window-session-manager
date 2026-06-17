@@ -15,7 +15,7 @@ const browser = globalThis.browser || globalThis.chrome;
  */
 
 let currentWindowId = null;
-let state = { sessions: [], options: {} };
+let state = { sessions: [], options: {}, untrackedWindows: [] };
 
 // Transient UI state that must survive re-renders.
 let namingInProgress = false; // "track this window" name input is showing
@@ -23,6 +23,8 @@ let suggestedName = "";
 let editingSessionId = null;  // session currently being renamed
 let confirmingDeleteId = null;
 const expandedSessions = new Set(); // session ids with their tab list shown
+const expandedWindows = new Set();  // untracked window ids with tabs shown
+const collapsedSections = new Set(); // section keys (open/closed/untracked) hidden
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -58,6 +60,7 @@ const ICON_PATHS = {
     '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>',
   chevronRight: '<polyline points="9 18 15 12 9 6"/>',
   chevronDown: '<polyline points="6 9 12 15 18 9"/>',
+  plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
   pin:
     '<line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/>',
 };
@@ -194,8 +197,13 @@ function renderSessions() {
   const closed = state.sessions
     .filter((s) => !s.open)
     .sort((a, b) => (b.lastSaved || 0) - (a.lastSaved || 0));
+  // The current window is already represented by the "This window" card, so
+  // keep it out of the Untracked list to avoid showing it twice.
+  const untracked = (state.untrackedWindows || []).filter(
+    (w) => w.id !== currentWindowId
+  );
 
-  if (!open.length && !closed.length) {
+  if (!open.length && !closed.length && !untracked.length) {
     container.append(
       el(
         "div",
@@ -206,14 +214,128 @@ function renderSessions() {
     return;
   }
 
-  if (open.length) {
-    container.append(el("div", { class: "list-heading" }, "Open"));
-    open.forEach((s) => container.append(renderSession(s)));
+  renderSection(container, "open", "Open", open, renderSession);
+  renderSection(container, "closed", "Closed", closed, renderSession);
+  renderSection(
+    container,
+    "untracked",
+    "Untracked",
+    untracked,
+    renderUntrackedWindow
+  );
+}
+
+function renderSection(container, key, label, items, renderItem) {
+  if (!items.length) return;
+  const collapsed = collapsedSections.has(key);
+  container.append(
+    el(
+      "div",
+      {
+        class: "list-heading collapsible",
+        onclick: () => {
+          if (collapsed) collapsedSections.delete(key);
+          else collapsedSections.add(key);
+          render();
+        },
+      },
+      icon(collapsed ? "chevronRight" : "chevronDown"),
+      el("span", { class: "heading-label" }, label),
+      el("span", { class: "heading-count" }, String(items.length))
+    )
+  );
+  if (!collapsed) items.forEach((it) => container.append(renderItem(it)));
+}
+
+function renderUntrackedWindow(w) {
+  const expanded = expandedWindows.has(w.id);
+  const row = el("div", {
+    class: "session untracked",
+    title: "Click to focus this window",
+    onclick: () => send({ type: "focusWindow", windowId: w.id }),
+  });
+  row.append(
+    el(
+      "button",
+      {
+        class: "icon-btn chevron",
+        title: expanded ? "Hide tabs" : "Show tabs",
+        onclick: (e) => {
+          e.stopPropagation();
+          if (expanded) expandedWindows.delete(w.id);
+          else expandedWindows.add(w.id);
+          render();
+        },
+      },
+      expanded ? icon("chevronDown") : icon("chevronRight")
+    )
+  );
+  row.append(el("span", { class: "dot" }));
+
+  const info = el("div", { class: "info" });
+  info.append(el("div", { class: "name" }, w.title));
+  info.append(
+    el(
+      "div",
+      { class: "meta" },
+      `${w.tabCount} tab${w.tabCount === 1 ? "" : "s"} · untracked`
+    )
+  );
+  row.append(info);
+
+  const actions = el("div", { class: "actions" });
+  actions.append(
+    el(
+      "button",
+      {
+        class: "icon-btn act-add",
+        title: "Track this window",
+        onclick: async (e) => {
+          e.stopPropagation();
+          const suggested = await send({
+            type: "getSuggestedName",
+            windowId: w.id,
+          });
+          await send({
+            type: "trackWindow",
+            windowId: w.id,
+            name: suggested || w.title || "Untitled session",
+          });
+        },
+      },
+      icon("plus")
+    )
+  );
+  row.append(actions);
+
+  if (!expanded) return row;
+
+  const group = el("div", { class: "session-group" }, row);
+  group.append(renderWindowTabList(w));
+  return group;
+}
+
+function renderWindowTabList(w) {
+  const list = el("div", { class: "tab-list" });
+  (w.tabs || []).forEach((t) => {
+    list.append(
+      el(
+        "div",
+        {
+          class: "tab",
+          title: `${t.url}\nClick to focus this tab`,
+          onclick: () => send({ type: "focusTab", windowId: w.id, tabId: t.id }),
+        },
+        faviconEl(t),
+        t.pinned ? el("span", { class: "pin", title: "Pinned" }, icon("pin")) : null,
+        el("span", { class: "tab-title" }, t.title || t.url)
+      )
+    );
+  });
+  if (!list.children.length) {
+    list.append(el("div", { class: "tab none" }, "No tabs"));
   }
-  if (closed.length) {
-    container.append(el("div", { class: "list-heading" }, "Closed"));
-    closed.forEach((s) => container.append(renderSession(s)));
-  }
+  return list;
 }
 
 function renderSession(s) {
@@ -497,6 +619,10 @@ async function refresh() {
   }
   for (const id of expandedSessions) {
     if (!state.sessions.some((s) => s.id === id)) expandedSessions.delete(id);
+  }
+  const liveWindowIds = new Set((state.untrackedWindows || []).map((w) => w.id));
+  for (const id of expandedWindows) {
+    if (!liveWindowIds.has(id)) expandedWindows.delete(id);
   }
   render();
 }

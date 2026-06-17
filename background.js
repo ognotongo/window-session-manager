@@ -617,6 +617,56 @@ function maybeAutoTrack(win) {
   }, AUTO_TRACK_DELAY_MS);
 }
 
+/* ---------------- untracked windows ---------------- */
+
+/*
+ * Live normal (non-private) windows not associated with a session, with a
+ * label and tab count for the sidebar's Untracked section.
+ */
+async function getUntrackedWindows() {
+  let wins = [];
+  try {
+    wins = await browser.windows.getAll({
+      populate: true,
+      windowTypes: ["normal"],
+    });
+  } catch (e) {
+    return [];
+  }
+  const result = [];
+  for (const win of wins) {
+    if (win.incognito) continue; // private windows are never tracked
+    if (windowToSession.has(win.id)) continue;
+    const tabs = win.tabs || [];
+    const active = tabs.find((t) => t.active) || tabs[0];
+    result.push({
+      id: win.id,
+      title: (active && active.title && active.title.trim()) || `Window ${win.id}`,
+      tabCount: tabs.length,
+      tabs: tabs.map((t) => ({
+        id: t.id,
+        url: t.url,
+        title: t.title,
+        favIconUrl: t.favIconUrl,
+        pinned: t.pinned,
+        active: t.active,
+      })),
+    });
+  }
+  return result;
+}
+
+// Bring an (untracked) window to the front.
+async function focusWindow(windowId) {
+  await browser.windows.update(windowId, { focused: true }).catch(() => {});
+}
+
+// Focus a live tab in an (untracked) window.
+async function focusTab(windowId, tabId) {
+  await browser.tabs.update(tabId, { active: true }).catch(() => {});
+  await browser.windows.update(windowId, { focused: true }).catch(() => {});
+}
+
 /* ---------------- event wiring ---------------- */
 
 async function onTabEvent(windowId) {
@@ -666,8 +716,10 @@ browser.windows.onCreated.addListener(async (win) => {
       applyTitlePrefacePersistent(win.id);
       scheduleSnapshot(win.id);
       await persistSessions();
-      broadcast();
     }
+    // Refresh the sidebar so the new window shows up — either as a re-linked
+    // session or in the Untracked section.
+    broadcast();
   }
   maybeAutoTrack(win);
 });
@@ -675,7 +727,11 @@ browser.windows.onCreated.addListener(async (win) => {
 browser.windows.onRemoved.addListener(async (windowId) => {
   await ensureReady();
   const sessionId = windowToSession.get(windowId);
-  if (!sessionId) return;
+  if (!sessionId) {
+    // An untracked window closed — refresh the Untracked section.
+    broadcast();
+    return;
+  }
   clearTimeout(snapshotTimers.get(windowId));
   snapshotTimers.delete(windowId);
   windowToSession.delete(windowId);
@@ -746,7 +802,11 @@ async function handleMessage(msg) {
   await ensureReady();
   switch (msg && msg.type) {
     case "getState":
-      return { sessions: Object.values(sessions), options };
+      return {
+        sessions: Object.values(sessions),
+        options,
+        untrackedWindows: await getUntrackedWindows(),
+      };
     case "getSuggestedName":
       return getSuggestedName(msg.windowId);
     case "trackWindow":
@@ -765,6 +825,10 @@ async function handleMessage(msg) {
       return snapshotAllTracked();
     case "openTab":
       return openSingleTab(msg.sessionId, msg.tabIndex, msg.targetWindowId);
+    case "focusWindow":
+      return focusWindow(msg.windowId);
+    case "focusTab":
+      return focusTab(msg.windowId, msg.tabId);
     case "closeSession":
       return closeSession(msg.sessionId);
     case "exportSessions":
