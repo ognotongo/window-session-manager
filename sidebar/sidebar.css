@@ -178,6 +178,10 @@ input[type="text"]:focus { outline: 2px solid var(--accent); outline-offset: -1p
 .session:hover .actions,
 .session.editing .actions { display: flex; }
 
+/* Separate the delete button from the close/rename buttons to avoid a
+   misclick that deletes a session. */
+.session .actions .gap-before { margin-left: 30px; }
+
 .session .chevron {
   flex: none;
   width: 28px;

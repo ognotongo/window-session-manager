@@ -265,11 +265,28 @@ function renderSession(s) {
       "✎"
     )
   );
+  if (s.open) {
+    actions.append(
+      el(
+        "button",
+        {
+          class: "icon-btn",
+          title: "Close this session's window (keeps the saved session)",
+          onclick: (e) => {
+            e.stopPropagation();
+            confirmingDeleteId = null;
+            send({ type: "closeSession", sessionId: s.id });
+          },
+        },
+        "✕"
+      )
+    );
+  }
   actions.append(
     el(
       "button",
       {
-        class: "icon-btn danger",
+        class: s.open ? "icon-btn danger gap-before" : "icon-btn danger",
         title:
           confirmingDeleteId === s.id
             ? "Click again to permanently delete"
