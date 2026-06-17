@@ -283,7 +283,7 @@ function renderSession(s) {
     el(
       "button",
       {
-        class: "icon-btn",
+        class: "icon-btn act-edit",
         title: "Rename",
         onclick: (e) => {
           e.stopPropagation();
@@ -300,7 +300,7 @@ function renderSession(s) {
       el(
         "button",
         {
-          class: "icon-btn",
+          class: "icon-btn act-close",
           title: "Close this session's window (keeps the saved session)",
           onclick: (e) => {
             e.stopPropagation();
