@@ -1,5 +1,6 @@
-# web-ext build output
+# build output
 web-ext-artifacts/
+dist/
 
 # node tooling, if ever added
 node_modules/

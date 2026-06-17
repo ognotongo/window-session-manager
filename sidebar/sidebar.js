@@ -4,6 +4,8 @@
 
 "use strict";
 
+const browser = globalThis.browser || globalThis.chrome;
+
 /*
  * Sidebar UI. Each sidebar instance belongs to one window, so it can show
  * whether *this* window is tracked, and offer to start tracking it.
@@ -42,6 +44,36 @@ function el(tag, attrs = {}, ...children) {
   return node;
 }
 
+/*
+ * Inline stroke icons sharing one style so the whole panel matches: 24x24
+ * viewBox, no fill, stroke = currentColor (set via the .icon CSS rule), so
+ * each icon takes the color of its button. Paths adapted from Feather (MIT)
+ * and Lucide (ISC). The header buttons embed the same markup directly in
+ * sidebar.html.
+ */
+const ICON_PATHS = {
+  edit: '<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>',
+  close: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+  trash:
+    '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>',
+  chevronRight: '<polyline points="9 18 15 12 9 6"/>',
+  chevronDown: '<polyline points="6 9 12 15 18 9"/>',
+  pin:
+    '<line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/>',
+};
+
+function icon(name) {
+  // Parse via DOMParser rather than assigning innerHTML (which trips a
+  // web-ext security warning). Source strings are static constants.
+  const markup =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" ' +
+    'class="icon" aria-hidden="true">' +
+    (ICON_PATHS[name] || "") +
+    "</svg>";
+  const doc = new DOMParser().parseFromString(markup, "image/svg+xml");
+  return document.importNode(doc.documentElement, true);
+}
+
 function relativeTime(ts) {
   if (!ts) return "";
   const diff = Date.now() - ts;
@@ -78,7 +110,7 @@ function renderCurrentWindow() {
           "button",
           {
             class: "secondary",
-            title: "Stop tracking this window. The session is kept as a closed snapshot.",
+            title: "Stop tracking this window and remove the session. The window stays open.",
             onclick: () => send({ type: "untrackWindow", windowId: currentWindowId }),
           },
           "Stop tracking"
@@ -122,7 +154,7 @@ function renderCurrentWindow() {
       { class: "row" },
       input,
       el("button", { class: "primary", onclick: () => confirmTrack(input.value) }, "Save"),
-      el("button", { class: "secondary", onclick: cancelNaming }, "✕")
+      el("button", { class: "secondary", onclick: cancelNaming }, icon("close"))
     )
   );
   input.focus();
@@ -213,7 +245,7 @@ function renderSession(s) {
           render();
         },
       },
-      expanded ? "▾" : "▸"
+      expanded ? icon("chevronDown") : icon("chevronRight")
     )
   );
   row.append(el("span", { class: "dot" }));
@@ -251,7 +283,7 @@ function renderSession(s) {
     el(
       "button",
       {
-        class: "icon-btn",
+        class: "icon-btn act-edit",
         title: "Rename",
         onclick: (e) => {
           e.stopPropagation();
@@ -260,14 +292,31 @@ function renderSession(s) {
           render();
         },
       },
-      "✎"
+      icon("edit")
     )
   );
+  if (s.open) {
+    actions.append(
+      el(
+        "button",
+        {
+          class: "icon-btn act-close",
+          title: "Close this session's window (keeps the saved session)",
+          onclick: (e) => {
+            e.stopPropagation();
+            confirmingDeleteId = null;
+            send({ type: "closeSession", sessionId: s.id });
+          },
+        },
+        icon("close")
+      )
+    );
+  }
   actions.append(
     el(
       "button",
       {
-        class: "icon-btn danger",
+        class: s.open ? "icon-btn danger gap-before" : "icon-btn danger",
         title:
           confirmingDeleteId === s.id
             ? "Click again to permanently delete"
@@ -283,7 +332,7 @@ function renderSession(s) {
           }
         },
       },
-      confirmingDeleteId === s.id ? "Sure?" : "🗑"
+      confirmingDeleteId === s.id ? "Sure?" : icon("trash")
     )
   );
   row.append(actions);
@@ -324,7 +373,7 @@ function renderTabList(s) {
           }),
       },
       faviconEl(t),
-      t.pinned ? el("span", { class: "pin", title: "Pinned" }, "📌") : null,
+      t.pinned ? el("span", { class: "pin", title: "Pinned" }, icon("pin")) : null,
       el("span", { class: "tab-title" }, t.title || t.url)
     );
     list.append(tabRow);

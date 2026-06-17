@@ -1,19 +1,53 @@
 # Window Session Manager
 
-A Firefox extension that treats **each window as a named session**. Tracked
-windows are auto-saved continuously; the sidebar lists every session — open or
-closed — and clicking a closed one reopens it as a new window with all its
-tabs.
+A browser extension that treats **each window as a named session**. Tracked
+windows are auto-saved continuously; a sidebar (Firefox) / side panel
+(Edge, Chrome) lists every session — open or closed — and clicking a closed
+one reopens it as a new window with all its tabs.
+
+It is a single Manifest V3 codebase: the shared `background.js` feature-detects
+Firefox-only capabilities (window title preface, container tabs, restart
+re-association via the sessions API) and gates them, so the same code runs on
+Chromium. Only the manifest differs per browser, assembled by `build.js`.
 
 ## Install (development)
+
+**Firefox** — load the source folder directly:
 
 1. Open `about:debugging#/runtime/this-firefox`
 2. Click **Load Temporary Add-on…** and pick `manifest.json` in this folder.
 3. The Sessions sidebar opens automatically (or press the toolbar button /
    `View → Sidebar → Sessions`).
 
-For a persistent dev workflow, [`web-ext`](https://extensionworkshop.com/documentation/develop/getting-started-with-web-ext/)
-works too: `npx web-ext run` from this directory.
+`npx web-ext run` from this directory also works for a live-reload workflow.
+
+**Edge / Chrome** — Chromium needs a different manifest (service worker +
+side panel), so build the target folder first:
+
+1. `node build.js chrome` — produces `dist/chrome/`.
+2. Open `edge://extensions` (or `chrome://extensions`), enable **Developer
+   mode**, click **Load unpacked**, and select the `dist/chrome` folder.
+3. Click the toolbar button to open the Sessions side panel.
+
+`node build.js` with no argument builds both `dist/firefox/` and
+`dist/chrome/`. Re-run it after changing shared files (the build copies a
+snapshot; it is not a live link).
+
+### Cross-browser differences
+
+The core experience is identical, but some Firefox features have no Chromium
+equivalent and are silently absent on Edge/Chrome:
+
+- **Window title preface** (showing the session name in the title bar) and the
+  **Window Titler** name integration — Chromium does not let extensions set or
+  read window titles.
+- **Container tabs** (`cookieStoreId`) — Chromium has no containers.
+- **Restart re-association** — Firefox tags windows via the sessions API so
+  they re-link to their sessions after a browser restart; Chromium has no
+  equivalent, so on Edge/Chrome open sessions become closed after a restart
+  (restore them with a click).
+- **Lazy restore** — on Firefox non-active tabs restore unloaded; on Chromium
+  they load normally.
 
 ## How it works
 

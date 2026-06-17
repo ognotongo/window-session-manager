@@ -4,6 +4,8 @@
 
 "use strict";
 
+const browser = globalThis.browser || globalThis.chrome;
+
 const DEFAULT_OPTIONS = {
   useWindowTitler: true,
   periodicSaveSecs: 30,

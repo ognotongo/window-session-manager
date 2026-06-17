@@ -1,8 +1,8 @@
 {
-  "manifest_version": 2,
+  "manifest_version": 3,
   "name": "Window Session Manager",
-  "version": "0.5.0",
-  "description": "Treats each window as a named session. Auto-saves tabs continuously, lists open and closed sessions in the sidebar, and restores closed sessions into new windows.",
+  "version": "0.6.0",
+  "description": "Treat each window as a named session. Tabs auto-save; open and closed sessions list together, one click to restore.",
   "browser_specific_settings": {
     "gecko": {
       "id": "window-session-manager@carl.l.brandenburg",
@@ -16,11 +16,11 @@
     "tabs",
     "storage",
     "sessions",
-    "cookies"
+    "cookies",
+    "alarms"
   ],
   "background": {
-    "scripts": ["background.js"],
-    "persistent": true
+    "scripts": ["background.js"]
   },
   "sidebar_action": {
     "default_title": "Sessions",
@@ -28,13 +28,12 @@
     "default_icon": "icons/icon.svg",
     "open_at_install": true
   },
-  "browser_action": {
+  "action": {
     "default_title": "Open Sessions sidebar",
     "default_icon": "icons/icon.svg"
   },
   "options_ui": {
-    "page": "options/options.html",
-    "browser_style": true
+    "page": "options/options.html"
   },
   "icons": {
     "48": "icons/icon.svg",

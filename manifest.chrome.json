@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Window Session Manager",
+  "version": "0.6.0",
+  "description": "Treat each window as a named session. Tabs auto-save; open and closed sessions list together, one click to restore.",
+  "permissions": [
+    "tabs",
+    "storage",
+    "alarms",
+    "sidePanel"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidebar/sidebar.html"
+  },
+  "action": {
+    "default_title": "Open Sessions panel",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "options_ui": {
+    "page": "options/options.html"
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  }
+}
