@@ -108,37 +108,57 @@ async function reconcileWindows() {
   } catch (e) {
     wins = [];
   }
-  const claimed = new Set();
-  for (const win of wins) {
-    if (win.type && win.type !== "normal") continue;
-    let sessionId = null;
-    if (hasWindowValues) {
-      sessionId = await browser.sessions
-        .getWindowValue(win.id, WINDOW_VALUE_KEY)
-        .catch(() => null);
-    }
-    if (!sessionId) {
-      const match = Object.values(sessions).find(
-        (s) => s.open && s.windowId === win.id
-      );
-      if (match) sessionId = match.id;
-    }
-    if (!sessionId || !sessions[sessionId] || claimed.has(sessionId)) continue;
-    claimed.add(sessionId);
-    sessions[sessionId].open = true;
-    sessions[sessionId].windowId = win.id;
-    windowToSession.set(win.id, sessionId);
-    applyTitlePreface(win.id, sessions[sessionId].name);
+  const normalWins = wins.filter((w) => !w.type || w.type === "normal");
+
+  // Firefox: recover associations from per-window values, looked up in
+  // parallel rather than one awaited round-trip per window.
+  const values = hasWindowValues
+    ? await Promise.all(
+        normalWins.map((w) =>
+          browser.sessions
+            .getWindowValue(w.id, WINDOW_VALUE_KEY)
+            .catch(() => null)
+        )
+      )
+    : [];
+  // Chromium fallback: match by the windowId recorded on an open session.
+  // Build the lookup once (O(sessions)) instead of scanning per window.
+  const byWindowId = new Map();
+  for (const s of Object.values(sessions)) {
+    if (s.open && s.windowId != null) byWindowId.set(s.windowId, s.id);
   }
+
+  let changed = false;
+  const claimed = new Set();
+  normalWins.forEach((win, i) => {
+    const sessionId = (hasWindowValues ? values[i] : null) || byWindowId.get(win.id) || null;
+    if (!sessionId || !sessions[sessionId] || claimed.has(sessionId)) return;
+    claimed.add(sessionId);
+    const s = sessions[sessionId];
+    const wasLinked = s.open && s.windowId === win.id;
+    s.open = true;
+    s.windowId = win.id;
+    windowToSession.set(win.id, sessionId);
+    // Only re-assert the title preface on a real (re-)link, not every idle
+    // wake where it is already set.
+    if (!wasLinked) {
+      changed = true;
+      applyTitlePreface(win.id, s.name);
+    }
+  });
   // Anything not matched to a live window is a closed session.
   for (const session of Object.values(sessions)) {
-    if (!claimed.has(session.id)) {
+    if (!claimed.has(session.id) && (session.open || session.windowId != null)) {
       session.open = false;
       session.windowId = null;
+      changed = true;
     }
   }
-  await persistSessions();
-  broadcast();
+  // Only persist/notify when state actually changed — most wakes are no-ops.
+  if (changed) {
+    await persistSessions();
+    broadcast();
+  }
 }
 
 /* ---------------- snapshots ---------------- */
@@ -155,18 +175,21 @@ function scheduleSnapshot(windowId) {
   );
 }
 
-async function snapshotWindow(windowId) {
+// Capture a tracked window's tabs into its session, in memory only. Returns
+// whether anything was stored. Persisting/broadcasting is left to the caller
+// so batch operations can do it once.
+async function captureWindow(windowId) {
   const sessionId = windowToSession.get(windowId);
   const session = sessionId && sessions[sessionId];
-  if (!session) return;
+  if (!session) return false;
 
   let tabs;
   try {
     tabs = await browser.tabs.query({ windowId });
   } catch (e) {
-    return; // window already gone
+    return false; // window already gone
   }
-  if (!tabs.length) return;
+  if (!tabs.length) return false;
 
   session.tabs = tabs.map((t) => ({
     url: t.url,
@@ -177,13 +200,25 @@ async function snapshotWindow(windowId) {
     favIconUrl: t.favIconUrl,
   }));
   session.lastSaved = Date.now();
-  await persistSessions();
-  broadcast();
+  return true;
+}
+
+async function snapshotWindow(windowId) {
+  if (await captureWindow(windowId)) {
+    await persistSessions();
+    broadcast();
+  }
 }
 
 async function snapshotAllTracked() {
-  for (const windowId of windowToSession.keys()) {
-    await snapshotWindow(windowId).catch(() => {});
+  // Capture every tracked window in parallel, then persist/broadcast once
+  // rather than once per window.
+  const results = await Promise.all(
+    [...windowToSession.keys()].map((id) => captureWindow(id).catch(() => false))
+  );
+  if (results.some(Boolean)) {
+    await persistSessions();
+    broadcast();
   }
 }
 
@@ -294,7 +329,9 @@ function newSessionId() {
   );
 }
 
-async function trackWindow(windowId, name) {
+// Create a session for a window without persisting/broadcasting, so callers
+// (single track vs. track-all) control how often that happens.
+async function trackWindowCore(windowId, name) {
   const id = newSessionId();
   sessions[id] = {
     id,
@@ -314,9 +351,15 @@ async function trackWindow(windowId, name) {
       .catch(() => {});
   }
   applyTitlePreface(windowId, sessions[id].name);
-  await snapshotWindow(windowId);
-  broadcast();
+  await captureWindow(windowId);
   return sessions[id];
+}
+
+async function trackWindow(windowId, name) {
+  const session = await trackWindowCore(windowId, name);
+  await persistSessions();
+  broadcast();
+  return session;
 }
 
 async function trackAllWindows() {
@@ -334,8 +377,13 @@ async function trackAllWindows() {
       name = `${name} (${n})`;
     }
     usedNames.add(name);
-    await trackWindow(win.id, name);
+    await trackWindowCore(win.id, name);
     tracked++;
+  }
+  // Persist/broadcast once for the whole batch instead of per window.
+  if (tracked) {
+    await persistSessions();
+    broadcast();
   }
   return { tracked };
 }
@@ -540,8 +588,7 @@ async function openSession(sessionId) {
     }
   }
   await browser.tabs.remove(placeholderId).catch(() => {});
-  await snapshotWindow(win.id);
-  broadcast();
+  await snapshotWindow(win.id); // persists + broadcasts
 }
 
 /*

@@ -65,16 +65,24 @@ const ICON_PATHS = {
     '<line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/>',
 };
 
+const iconTemplates = new Map();
+
 function icon(name) {
-  // Parse via DOMParser rather than assigning innerHTML (which trips a
-  // web-ext security warning). Source strings are static constants.
-  const markup =
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" ' +
-    'class="icon" aria-hidden="true">' +
-    (ICON_PATHS[name] || "") +
-    "</svg>";
-  const doc = new DOMParser().parseFromString(markup, "image/svg+xml");
-  return document.importNode(doc.documentElement, true);
+  // Parse each icon once via DOMParser (which avoids the innerHTML web-ext
+  // warning) and cache the result; cloneNode per use is far cheaper than
+  // re-parsing on every render. Source strings are static constants.
+  let template = iconTemplates.get(name);
+  if (!template) {
+    const markup =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" ' +
+      'class="icon" aria-hidden="true">' +
+      (ICON_PATHS[name] || "") +
+      "</svg>";
+    const doc = new DOMParser().parseFromString(markup, "image/svg+xml");
+    template = document.importNode(doc.documentElement, true);
+    iconTemplates.set(name, template);
+  }
+  return template.cloneNode(true);
 }
 
 function relativeTime(ts) {
@@ -627,8 +635,20 @@ async function refresh() {
   render();
 }
 
+// Coalesce bursts of stateChanged (e.g. tracking several windows at once)
+// into a single getState + re-render.
+let refreshScheduled = false;
+function scheduleRefresh() {
+  if (refreshScheduled) return;
+  refreshScheduled = true;
+  setTimeout(() => {
+    refreshScheduled = false;
+    refresh();
+  }, 50);
+}
+
 browser.runtime.onMessage.addListener((msg) => {
-  if (msg && msg.type === "stateChanged") refresh();
+  if (msg && msg.type === "stateChanged") scheduleRefresh();
 });
 
 $("#open-options").addEventListener("click", () =>
