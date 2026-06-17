@@ -23,6 +23,7 @@ let suggestedName = "";
 let editingSessionId = null;  // session currently being renamed
 let confirmingDeleteId = null;
 const expandedSessions = new Set(); // session ids with their tab list shown
+const expandedWindows = new Set();  // untracked window ids with tabs shown
 const collapsedSections = new Set(); // section keys (open/closed/untracked) hidden
 
 const $ = (sel) => document.querySelector(sel);
@@ -247,11 +248,27 @@ function renderSection(container, key, label, items, renderItem) {
 }
 
 function renderUntrackedWindow(w) {
+  const expanded = expandedWindows.has(w.id);
   const row = el("div", {
     class: "session untracked",
     title: "Untracked window",
   });
-  row.append(el("span", { class: "chevron-spacer" }));
+  row.append(
+    el(
+      "button",
+      {
+        class: "icon-btn chevron",
+        title: expanded ? "Hide tabs" : "Show tabs",
+        onclick: (e) => {
+          e.stopPropagation();
+          if (expanded) expandedWindows.delete(w.id);
+          else expandedWindows.add(w.id);
+          render();
+        },
+      },
+      expanded ? icon("chevronDown") : icon("chevronRight")
+    )
+  );
   row.append(el("span", { class: "dot" }));
 
   const info = el("div", { class: "info" });
@@ -289,7 +306,35 @@ function renderUntrackedWindow(w) {
     )
   );
   row.append(actions);
-  return row;
+
+  if (!expanded) return row;
+
+  const group = el("div", { class: "session-group" }, row);
+  group.append(renderWindowTabList(w));
+  return group;
+}
+
+function renderWindowTabList(w) {
+  const list = el("div", { class: "tab-list" });
+  (w.tabs || []).forEach((t) => {
+    list.append(
+      el(
+        "div",
+        {
+          class: "tab",
+          title: `${t.url}\nClick to focus this tab`,
+          onclick: () => send({ type: "focusTab", windowId: w.id, tabId: t.id }),
+        },
+        faviconEl(t),
+        t.pinned ? el("span", { class: "pin", title: "Pinned" }, icon("pin")) : null,
+        el("span", { class: "tab-title" }, t.title || t.url)
+      )
+    );
+  });
+  if (!list.children.length) {
+    list.append(el("div", { class: "tab none" }, "No tabs"));
+  }
+  return list;
 }
 
 function renderSession(s) {
@@ -573,6 +618,10 @@ async function refresh() {
   }
   for (const id of expandedSessions) {
     if (!state.sessions.some((s) => s.id === id)) expandedSessions.delete(id);
+  }
+  const liveWindowIds = new Set((state.untrackedWindows || []).map((w) => w.id));
+  for (const id of expandedWindows) {
+    if (!liveWindowIds.has(id)) expandedWindows.delete(id);
   }
   render();
 }

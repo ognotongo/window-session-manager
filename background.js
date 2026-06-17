@@ -643,9 +643,23 @@ async function getUntrackedWindows() {
       id: win.id,
       title: (active && active.title && active.title.trim()) || `Window ${win.id}`,
       tabCount: tabs.length,
+      tabs: tabs.map((t) => ({
+        id: t.id,
+        url: t.url,
+        title: t.title,
+        favIconUrl: t.favIconUrl,
+        pinned: t.pinned,
+        active: t.active,
+      })),
     });
   }
   return result;
+}
+
+// Focus a live tab in an (untracked) window.
+async function focusTab(windowId, tabId) {
+  await browser.tabs.update(tabId, { active: true }).catch(() => {});
+  await browser.windows.update(windowId, { focused: true }).catch(() => {});
 }
 
 /* ---------------- event wiring ---------------- */
@@ -806,6 +820,8 @@ async function handleMessage(msg) {
       return snapshotAllTracked();
     case "openTab":
       return openSingleTab(msg.sessionId, msg.tabIndex, msg.targetWindowId);
+    case "focusTab":
+      return focusTab(msg.windowId, msg.tabId);
     case "closeSession":
       return closeSession(msg.sessionId);
     case "exportSessions":

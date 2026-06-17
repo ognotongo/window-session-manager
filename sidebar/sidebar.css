@@ -241,9 +241,8 @@ input[type="text"]:focus { outline: 2px solid var(--accent); outline-offset: -1p
   padding: 2px 0;
 }
 
-/* Untracked rows have no expand chevron; this keeps their dot/label aligned
-   with tracked rows, and their + button is always visible. */
-.session .chevron-spacer { flex: none; width: 28px; }
+/* Untracked rows aren't clickable as a whole (only their buttons), and their
+   + button is always visible. */
 .session.untracked { cursor: default; }
 .session.untracked .actions { display: flex; }
 .session .chevron .icon {
