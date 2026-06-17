@@ -251,7 +251,8 @@ function renderUntrackedWindow(w) {
   const expanded = expandedWindows.has(w.id);
   const row = el("div", {
     class: "session untracked",
-    title: "Untracked window",
+    title: "Click to focus this window",
+    onclick: () => send({ type: "focusWindow", windowId: w.id }),
   });
   row.append(
     el(

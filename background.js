@@ -656,6 +656,11 @@ async function getUntrackedWindows() {
   return result;
 }
 
+// Bring an (untracked) window to the front.
+async function focusWindow(windowId) {
+  await browser.windows.update(windowId, { focused: true }).catch(() => {});
+}
+
 // Focus a live tab in an (untracked) window.
 async function focusTab(windowId, tabId) {
   await browser.tabs.update(tabId, { active: true }).catch(() => {});
@@ -820,6 +825,8 @@ async function handleMessage(msg) {
       return snapshotAllTracked();
     case "openTab":
       return openSingleTab(msg.sessionId, msg.tabIndex, msg.targetWindowId);
+    case "focusWindow":
+      return focusWindow(msg.windowId);
     case "focusTab":
       return focusTab(msg.windowId, msg.tabId);
     case "closeSession":

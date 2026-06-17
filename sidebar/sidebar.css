@@ -241,9 +241,7 @@ input[type="text"]:focus { outline: 2px solid var(--accent); outline-offset: -1p
   padding: 2px 0;
 }
 
-/* Untracked rows aren't clickable as a whole (only their buttons), and their
-   + button is always visible. */
-.session.untracked { cursor: default; }
+/* The + button on untracked rows is always visible (not hover-only). */
 .session.untracked .actions { display: flex; }
 .session .chevron .icon {
   width: 20px;
