@@ -55,6 +55,9 @@ const DEFAULT_OPTIONS = {
 
 const SNAPSHOT_DEBOUNCE_MS = 750;
 const WINDOW_VALUE_KEY = "wsmSessionId";
+// Object keys that would mutate the prototype rather than add an entry; never
+// use these as a session id from untrusted (imported) data.
+const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 const PERIODIC_ALARM = "wsm-periodic-save";
 // Both engines clamp alarm periods to a floor (~30s Chrome, ~60s Firefox);
 // use the larger so behavior matches the configured value where possible.
@@ -494,8 +497,17 @@ async function importSessions(data) {
     // Keep the original id so re-importing the same file updates in place
     // instead of duplicating — but never clobber a session that is currently
     // open in a live window. Imported sessions always arrive closed.
-    const id = typeof raw.id === "string" && raw.id ? raw.id : newSessionId();
-    if (sessions[id] && sessions[id].open) continue;
+    // Reject ids that would mutate the object prototype instead of adding an
+    // entry (e.g. "__proto__") since the id comes from an untrusted file.
+    const rawId = typeof raw.id === "string" ? raw.id : "";
+    const id =
+      rawId && !UNSAFE_KEYS.has(rawId) ? rawId : newSessionId();
+    if (
+      Object.prototype.hasOwnProperty.call(sessions, id) &&
+      sessions[id].open
+    ) {
+      continue;
+    }
     sessions[id] = {
       id,
       name:
