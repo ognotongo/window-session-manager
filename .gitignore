@@ -9,3 +9,8 @@ node_modules/
 .vscode/
 Thumbs.db
 Desktop.ini
+
+# Raw OS screenshot captures ("Screenshot <date>.png", with a space).
+# The processed store/ deliverables (screenshot-*.png, store-logo-300.png)
+# are tracked; these scratch captures are not.
+Screenshot *.png
