@@ -33,6 +33,7 @@ optimizes for:
 | **Partial restore** | M | High | Checkbox-select which tabs to reopen instead of the whole window. Natural extension of the existing expand-tab UI. |
 | **Restore into current window** | S | Med | Option to append a session's tabs to the focused window instead of opening a new one. |
 | **Move / copy a tab between sessions** | M | Med | Drag a tab from one expanded session into another, or a context-menu "Send to session…". |
+| **Drag a tab onto a session to move its window** | M | High | Drag a tab out of an expanded window/session and drop it on another session to move the **live** tab into that session's window (`tabs.move` to the target window). Clean when the target is open; for a closed target, either open it first or append the URL to its saved list. Needs drag-and-drop affordances on tab rows and drop targets on session rows. Builds on the expandable tab UI; closely related to "Move / copy a tab between sessions" above. |
 | **Duplicate a session** | S | Low | One-click clone of a closed session's tab list. |
 | **Merge / split sessions** | M | Med | Combine two closed sessions, or split selected tabs into a new one. |
 | **Soft delete / undo** | S | Med | Move deletes to a short-lived trash with an undo toast instead of the current two-click confirm. |
