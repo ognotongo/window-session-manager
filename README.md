@@ -121,5 +121,5 @@ equivalent and are silently absent on Edge/Chrome:
 
 ## Ideas / future work
 
-- Keyboard shortcut (`commands` manifest key) to save or open the sidebar.
-- Sync sessions across machines via `storage.sync` (size limits apply).
+See [docs/IDEAS.md](docs/IDEAS.md) for the full enhancement backlog (organized
+by theme, with effort/impact estimates and near-term picks).
