@@ -121,3 +121,11 @@ stay within the guiding principles:
    and makes future changes safer.
 5. **Release script** (S / Med) — removes the recurring two-manifest version
    bump as a manual footgun.
+
+---
+
+## Known issues / bugs
+
+| Bug | Severity | Notes |
+|---|---|---|
+| **Sidebar goes blank after a window sits idle (Firefox)** | Med | After a window is left idle for a significant time, the Sessions sidebar renders blank. Firefox-only, MV3-related: the event-page background suspends when idle, and the sidebar's `refresh()` clears the DOM (`container.textContent = ""` in `renderCurrentWindow`/`renderSessions`) *before* awaiting `getState`-derived data. Leading hypothesis: if the post-idle `getState` round-trip resolves to `undefined` or an object without `sessions` (e.g. the background errored or didn't respond after respawn), the subsequent `state.sessions.*` access throws mid-render, leaving the already-cleared panel empty. Likely fixes to investigate: make `refresh()` defensive (skip render / keep last good state when `getState` returns no `sessions`), and/or re-fetch on the sidebar regaining focus/visibility (`visibilitychange`). |
