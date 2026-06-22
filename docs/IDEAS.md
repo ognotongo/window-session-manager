@@ -45,6 +45,7 @@ optimizes for:
 | Idea | Effort | Impact | Notes |
 |---|---|---|---|
 | **Search / filter box** | M | High | Filter sessions and tabs by name/URL/title in the sidebar header. High value once the list grows. |
+| **Global tab search with results section** | M | High | A search box (in the header) that matches tab titles across **every** session — open and closed. Matches render in their own collapsible **Search results** section placed below the "This window" card and the Open list, each result showing its tab title and parent session, and clicking it acts on that tab (focus if its session is open, open-the-tab if closed). Differs from the in-place "Search / filter box" above: this surfaces individual matching tabs in a dedicated section rather than filtering the existing session rows. Could extend to URL matching and result highlighting. |
 | **Tags or folders** | L | Med | Group sessions beyond Open/Closed/Untracked. Adds data-model complexity. |
 | **Pin / favorite sessions** | S | Med | Keep important sessions at the top of the list. |
 | **Per-session color or icon** | S | Low | Visual differentiation; could also drive a window-title or tab-group color. |
