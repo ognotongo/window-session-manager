@@ -925,8 +925,38 @@ function render() {
   renderSessions();
 }
 
+// Retry backoff for a getState that comes back empty while the background is
+// still respawning after idle suspension.
+let retryTimer = null;
+let retryCount = 0;
+const MAX_REFRESH_RETRIES = 6;
+
+function scheduleRetry() {
+  if (retryTimer || retryCount >= MAX_REFRESH_RETRIES) return;
+  retryCount++;
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    refresh();
+  }, 200 * retryCount); // 200ms, 400ms, … up to ~1.2s
+}
+
 async function refresh() {
-  state = await send({ type: "getState" });
+  let next;
+  try {
+    next = await send({ type: "getState" });
+  } catch (e) {
+    next = null;
+  }
+  // After the Firefox event page suspends on idle, the first getState can
+  // resolve to undefined or an object without a sessions array — the worker is
+  // still respawning, or handleMessage errored. Rendering that would clear the
+  // panel to blank, so keep the last good state and retry shortly instead.
+  if (!next || !Array.isArray(next.sessions)) {
+    scheduleRetry();
+    return;
+  }
+  retryCount = 0;
+  state = next;
   // Drop transient UI state for sessions that vanished.
   if (editingSessionId && !state.sessions.some((s) => s.id === editingSessionId)) {
     editingSessionId = null;
@@ -948,11 +978,15 @@ async function refresh() {
 }
 
 // Coalesce bursts of stateChanged (e.g. tracking several windows at once)
-// into a single getState + re-render.
+// into a single getState + re-render. Each external trigger resets the retry
+// budget so a fresh reason to refresh always gets a full set of attempts.
 let refreshScheduled = false;
 function scheduleRefresh() {
   if (refreshScheduled) return;
   refreshScheduled = true;
+  retryCount = 0;
+  clearTimeout(retryTimer);
+  retryTimer = null;
   setTimeout(() => {
     refreshScheduled = false;
     refresh();
@@ -962,6 +996,14 @@ function scheduleRefresh() {
 browser.runtime.onMessage.addListener((msg) => {
   if (msg && msg.type === "stateChanged") scheduleRefresh();
 });
+
+// Recover a stale or blank panel without user interaction: when the sidebar
+// becomes visible or regains focus after the window sat idle (and the
+// background suspended), re-fetch the state.
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) scheduleRefresh();
+});
+window.addEventListener("focus", () => scheduleRefresh());
 
 $("#open-options").addEventListener("click", () =>
   browser.runtime.openOptionsPage()

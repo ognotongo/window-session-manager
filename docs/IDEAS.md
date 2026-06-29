@@ -119,6 +119,16 @@ stay within the guiding principles:
 
 ## Known issues / bugs
 
-| Bug | Severity | Notes |
-|---|---|---|
-| **Sidebar goes blank after a window sits idle (Firefox)** | Med | After a window is left idle for a significant time, the Sessions sidebar renders blank. Firefox-only, MV3-related: the event-page background suspends when idle, and the sidebar's `refresh()` clears the DOM (`container.textContent = ""` in `renderCurrentWindow`/`renderSessions`) *before* awaiting `getState`-derived data. Leading hypothesis: if the post-idle `getState` round-trip resolves to `undefined` or an object without `sessions` (e.g. the background errored or didn't respond after respawn), the subsequent `state.sessions.*` access throws mid-render, leaving the already-cleared panel empty. Likely fixes to investigate: make `refresh()` defensive (skip render / keep last good state when `getState` returns no `sessions`), and/or re-fetch on the sidebar regaining focus/visibility (`visibilitychange`). |
+_No open known issues._
+
+Recently fixed:
+
+- **Sidebar goes blank after a window sits idle (Firefox)** — `refresh()` is now
+  defensive: a post-idle `getState` that resolves to `undefined` or an object
+  without a `sessions` array no longer renders, keeping the last good panel and
+  retrying with backoff; the sidebar also re-fetches on `visibilitychange` /
+  focus so a stale or blank panel recovers on its own.
+- **Window title preface lost after idle / overwritten by another extension** —
+  the `[name]` preface is now re-asserted on every wake, after each snapshot,
+  and on the periodic alarm, so tracked windows keep their title instead of
+  occasionally showing none.

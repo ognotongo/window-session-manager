@@ -152,12 +152,11 @@ async function reconcileWindows() {
     s.open = true;
     s.windowId = win.id;
     windowToSession.set(win.id, sessionId);
-    // Only re-assert the title preface on a real (re-)link, not every idle
-    // wake where it is already set.
-    if (!wasLinked) {
-      changed = true;
-      applyTitlePreface(win.id, s.name);
-    }
+    if (!wasLinked) changed = true;
+    // Re-own the title on every wake (not just a fresh link): the preface is
+    // routinely lost while the background is suspended, so reapplying it here
+    // is what brings titles back after the window sat idle.
+    applyTitlePreface(win.id, s.name);
   });
   // Anything not matched to a live window is a closed session.
   for (const session of Object.values(sessions)) {
@@ -257,6 +256,9 @@ async function snapshotWindow(windowId) {
     await persistSessions();
     broadcast();
   }
+  // Tab activity is exactly when another titling extension would have
+  // overwritten our preface, so re-own the title once the snapshot settles.
+  reassertTitlePreface(windowId);
 }
 
 async function snapshotAllTracked() {
@@ -346,6 +348,20 @@ function applyTitlePreface(windowId, name) {
 function clearTitlePreface(windowId) {
   if (!isFirefox) return;
   browser.windows.update(windowId, { titlePreface: "" }).catch(() => {});
+}
+
+/*
+ * Re-own a tracked window's title: write our [name] preface again. Two actors
+ * routinely strip it — the title is lost when the background suspends on idle,
+ * and another titling extension (Window Titler reacts to the same tab events
+ * we do) can stomp it last. applyTitlePreface is idempotent and gated to
+ * Firefox + the setTitlePreface option, so this is cheap to call on every
+ * wake, snapshot, and periodic tick to keep the title ours.
+ */
+function reassertTitlePreface(windowId) {
+  const sessionId = windowToSession.get(windowId);
+  const session = sessionId && sessions[sessionId];
+  if (session) applyTitlePreface(windowId, session.name);
 }
 
 const TITLE_PREFACE_REAPPLY_MS = 2000;
@@ -1096,6 +1112,9 @@ browser.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== PERIODIC_ALARM) return;
   await ensureReady();
   await snapshotAllTracked();
+  // Periodically re-own every tracked window's title so a preface stomped
+  // between snapshots is corrected even while the browser sits running.
+  for (const windowId of windowToSession.keys()) reassertTitlePreface(windowId);
 });
 
 browser.storage.onChanged.addListener(async (changes, area) => {
