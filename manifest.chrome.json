@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Window Session Manager",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Treat each window as a named session. Tabs auto-save; open and closed sessions list together, one click to restore.",
   "permissions": [
     "tabs",
+    "tabGroups",
     "storage",
     "alarms",
     "sidePanel"

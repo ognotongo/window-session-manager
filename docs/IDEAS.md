@@ -54,7 +54,6 @@ optimizes for:
 |---|---|---|---|
 | **Keyboard shortcuts (`commands`)** _(discussed)_ | S | Med | Open the panel, Save now, track current window, quick-switch. Add the `commands` manifest key + handlers. |
 | **Browser context-menu integration** | M | Med | Right-click a page/link → "Add to session…". Needs the `contextMenus`/`menus` permission. |
-| **Tab group preservation** | L | Med | Save/restore native tab groups (names, colors, collapsed state). APIs differ across engines; Firefox tab-group support is newer. Two facets: (1) **on save/restore** — persist each tab's group membership and the group's name/color/collapsed state, and recreate the groups when reopening a session; (2) **visually in the sidebar** — when a session's tabs are expanded, render them grouped by tab-group with the group's name and color (and respect collapsed state) instead of a flat list, so the sidebar mirrors the browser. The visual half can ship first against live windows via the `tabGroups`/`tabs.group` APIs; the save half needs the group metadata stored alongside each session's tabs and a migration. |
 
 ## Sync, backup & portability
 

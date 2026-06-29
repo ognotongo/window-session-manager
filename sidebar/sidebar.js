@@ -27,6 +27,22 @@ let dragSource = null;        // descriptor of the tab row currently being dragg
 const expandedSessions = new Set(); // session ids with their tab list shown
 const expandedWindows = new Set();  // untracked window ids with tabs shown
 const collapsedSections = new Set(); // section keys (open/closed/untracked/results) hidden
+// Per-render override of a tab group's collapsed state, keyed "sessionId:groupId".
+// Absent means follow the group's saved collapsed flag.
+const groupCollapseOverrides = new Map();
+
+// Native tab-group colors mapped to swatch/accent values for the sidebar.
+const GROUP_COLORS = {
+  grey: "#8f8f9d",
+  blue: "#4f8cff",
+  red: "#e35e6b",
+  yellow: "#f5c451",
+  green: "#3fbf6f",
+  pink: "#f06ccf",
+  purple: "#a87ffb",
+  cyan: "#46c5d6",
+  orange: "#f59345",
+};
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -659,35 +675,92 @@ function faviconEl(t) {
   return img;
 }
 
-function renderTabList(s) {
-  const list = el("div", { class: "tab-list" });
-  (s.tabs || []).forEach((t, i) => {
-    const source = sessionTabSource(s, t, i);
-    const tabRow = el(
+function renderTabRow(s, t, i) {
+  const source = sessionTabSource(s, t, i);
+  const tabRow = el(
+    "div",
+    {
+      class: "tab",
+      title: `${t.url}\n${
+        s.open
+          ? "Click to focus this tab"
+          : "Click to open just this tab in the current window"
+      }\nDrag onto a session to move it (Ctrl to copy)`,
+      onclick: () =>
+        send({
+          type: "openTab",
+          sessionId: s.id,
+          tabIndex: i,
+          targetWindowId: currentWindowId,
+        }),
+      oncontextmenu: (e) => showTabContextMenu(e, source),
+    },
+    faviconEl(t),
+    t.pinned ? el("span", { class: "pin", title: "Pinned" }, icon("pin")) : null,
+    el("span", { class: "tab-title" }, t.title || t.url)
+  );
+  makeTabDraggable(tabRow, source);
+  return tabRow;
+}
+
+// Render one tab group as a colored header over its run of tabs. The header
+// follows the group's saved collapsed state until the user toggles it here.
+function renderTabGroup(s, groupId, meta, runTabs) {
+  const color = (meta && GROUP_COLORS[meta.color]) || GROUP_COLORS.grey;
+  const title = (meta && meta.title) || "Group";
+  const key = `${s.id}:${groupId}`;
+  const collapsed = groupCollapseOverrides.has(key)
+    ? groupCollapseOverrides.get(key)
+    : !!(meta && meta.collapsed);
+
+  const wrap = el("div", { class: "tab-group", style: `--group-color: ${color}` });
+  wrap.append(
+    el(
       "div",
       {
-        class: "tab",
-        title: `${t.url}\n${
-          s.open
-            ? "Click to focus this tab"
-            : "Click to open just this tab in the current window"
-        }\nDrag onto a session to move it (Ctrl to copy)`,
-        onclick: () =>
-          send({
-            type: "openTab",
-            sessionId: s.id,
-            tabIndex: i,
-            targetWindowId: currentWindowId,
-          }),
-        oncontextmenu: (e) => showTabContextMenu(e, source),
+        class: "tab-group-header",
+        title: `Tab group: ${title}`,
+        onclick: (e) => {
+          e.stopPropagation();
+          groupCollapseOverrides.set(key, !collapsed);
+          render();
+        },
       },
-      faviconEl(t),
-      t.pinned ? el("span", { class: "pin", title: "Pinned" }, icon("pin")) : null,
-      el("span", { class: "tab-title" }, t.title || t.url)
-    );
-    makeTabDraggable(tabRow, source);
-    list.append(tabRow);
-  });
+      el("span", { class: "tab-group-swatch", style: `background: ${color}` }),
+      collapsed ? icon("chevronRight") : icon("chevronDown"),
+      el("span", { class: "tab-group-title" }, title),
+      el("span", { class: "tab-group-count" }, String(runTabs.length))
+    )
+  );
+  if (!collapsed) {
+    runTabs.forEach(({ t, i }) => wrap.append(renderTabRow(s, t, i)));
+  }
+  return wrap;
+}
+
+function renderTabList(s) {
+  const list = el("div", { class: "tab-list" });
+  const tabs = s.tabs || [];
+  const groupMeta = new Map((s.groups || []).map((g) => [g.id, g]));
+
+  // Walk the tabs in order, emitting ungrouped tabs directly and gathering each
+  // contiguous run of same-group tabs (the browser keeps groups contiguous)
+  // into a group block.
+  let i = 0;
+  while (i < tabs.length) {
+    const gid = tabs[i].groupId;
+    if (gid == null) {
+      list.append(renderTabRow(s, tabs[i], i));
+      i++;
+      continue;
+    }
+    const start = i;
+    while (i < tabs.length && tabs[i].groupId === gid) i++;
+    const runTabs = [];
+    for (let j = start; j < i; j++) runTabs.push({ t: tabs[j], i: j });
+    list.append(renderTabGroup(s, gid, groupMeta.get(gid), runTabs));
+  }
+
   if (!list.children.length) {
     list.append(el("div", { class: "tab none" }, "No tabs saved yet"));
   }
@@ -860,6 +933,12 @@ async function refresh() {
   }
   for (const id of expandedSessions) {
     if (!state.sessions.some((s) => s.id === id)) expandedSessions.delete(id);
+  }
+  for (const key of groupCollapseOverrides.keys()) {
+    const sid = key.slice(0, key.lastIndexOf(":"));
+    if (!state.sessions.some((s) => s.id === sid)) {
+      groupCollapseOverrides.delete(key);
+    }
   }
   const liveWindowIds = new Set((state.untrackedWindows || []).map((w) => w.id));
   for (const id of expandedWindows) {

@@ -94,6 +94,12 @@ equivalent and are silently absent on Edge/Chrome:
   pinned marker, title). Clicking a tab in an **open** session focuses that
   tab; in a **closed** session it opens just that tab in the current window
   without restoring the whole session.
+- **Tab groups**: native tab groups are preserved. Each tab's group
+  membership and the group's name, color, and collapsed state are saved with
+  the session and recreated when it's restored; in the sidebar an expanded
+  session renders its tabs under colored group headers (click a header to
+  collapse/expand it). Requires Firefox 139+ or Chromium; older engines simply
+  save the tabs without group info.
 - **Current session**: the session backing the window you're in is marked with
   an accent stripe and a *current* badge in the Open list, so it's obvious at a
   glance which session you're looking at.

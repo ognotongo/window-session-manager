@@ -38,6 +38,16 @@ const isFirefox = typeof browser.runtime.getBrowserInfo === "function";
 const hasWindowValues = !!(
   browser.sessions && browser.sessions.setWindowValue
 );
+// Native tab groups: tabs.group/ungroup landed in Firefox 138 and the
+// tabGroups metadata API (title/color/collapsed) in 139; Chromium has both
+// behind the "tabGroups" permission. Feature-detected so older engines just
+// skip group preservation rather than erroring.
+const hasTabGroups = !!(
+  browser.tabGroups &&
+  browser.tabGroups.query &&
+  browser.tabs &&
+  browser.tabs.group
+);
 
 const DEFAULT_OPTIONS = {
   // Derive session names from the window title preface (what Window Titler
@@ -194,16 +204,52 @@ async function captureWindow(windowId) {
   }
   if (!tabs.length) return false;
 
-  session.tabs = tabs.map((t) => ({
-    url: t.url,
-    title: t.title,
-    pinned: t.pinned,
-    active: t.active,
-    cookieStoreId: t.cookieStoreId,
-    favIconUrl: t.favIconUrl,
-  }));
+  session.tabs = tabs.map((t) => {
+    const saved = {
+      url: t.url,
+      title: t.title,
+      pinned: t.pinned,
+      active: t.active,
+      cookieStoreId: t.cookieStoreId,
+      favIconUrl: t.favIconUrl,
+    };
+    // -1 (TAB_GROUP_ID_NONE) means ungrouped; store only real group ids.
+    if (hasTabGroups && typeof t.groupId === "number" && t.groupId >= 0) {
+      saved.groupId = t.groupId;
+    }
+    return saved;
+  });
+  session.groups = await captureGroups(windowId, session.tabs);
   session.lastSaved = Date.now();
   return true;
+}
+
+/*
+ * Snapshot the metadata (title/color/collapsed) of every tab group referenced
+ * by the captured tabs. The stored group ids double as grouping keys within
+ * the snapshot; openSession maps them to fresh group ids on restore. Only the
+ * groups still backing a saved tab are kept, so emptied groups drop out.
+ */
+async function captureGroups(windowId, savedTabs) {
+  if (!hasTabGroups) return [];
+  const referenced = new Set(
+    savedTabs.map((t) => t.groupId).filter((id) => id != null)
+  );
+  if (!referenced.size) return [];
+  let groups = [];
+  try {
+    groups = await browser.tabGroups.query({ windowId });
+  } catch (e) {
+    return [];
+  }
+  return groups
+    .filter((g) => referenced.has(g.id))
+    .map((g) => ({
+      id: g.id,
+      title: g.title || "",
+      color: g.color,
+      collapsed: !!g.collapsed,
+    }));
 }
 
 async function snapshotWindow(windowId) {
@@ -475,7 +521,23 @@ function sanitizeImportedTab(t) {
   };
   if (typeof t.cookieStoreId === "string") tab.cookieStoreId = t.cookieStoreId;
   if (typeof t.favIconUrl === "string") tab.favIconUrl = t.favIconUrl;
+  if (typeof t.groupId === "number" && t.groupId >= 0) tab.groupId = t.groupId;
   return tab;
+}
+
+function sanitizeImportedGroups(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const g of raw) {
+    if (!g || typeof g !== "object" || typeof g.id !== "number") continue;
+    out.push({
+      id: g.id,
+      title: typeof g.title === "string" ? g.title : "",
+      color: typeof g.color === "string" ? g.color : "grey",
+      collapsed: !!g.collapsed,
+    });
+  }
+  return out;
 }
 
 async function importSessions(data) {
@@ -494,6 +556,11 @@ async function importSessions(data) {
       ? raw.tabs.map(sanitizeImportedTab).filter(Boolean)
       : [];
     if (!tabs.length) continue;
+    // Keep only group metadata still referenced by a surviving tab.
+    const referenced = new Set(tabs.map((t) => t.groupId).filter((id) => id != null));
+    const groups = sanitizeImportedGroups(raw.groups).filter((g) =>
+      referenced.has(g.id)
+    );
     // Keep the original id so re-importing the same file updates in place
     // instead of duplicating — but never clobber a session that is currently
     // open in a live window. Imported sessions always arrive closed.
@@ -517,6 +584,7 @@ async function importSessions(data) {
       open: false,
       windowId: null,
       tabs,
+      groups,
     };
     imported++;
   }
@@ -562,6 +630,9 @@ async function openSession(sessionId) {
   }
   applyTitlePrefacePersistent(win.id);
 
+  // Remember which created tab belonged to which saved group so the groups
+  // can be rebuilt once every tab exists.
+  const grouped = [];
   for (let i = 0; i < tabs.length; i++) {
     const t = tabs[i];
     const props = {
@@ -585,22 +656,68 @@ async function openSession(sessionId) {
     if (isFirefox && t.cookieStoreId && t.cookieStoreId !== "firefox-default") {
       props.cookieStoreId = t.cookieStoreId;
     }
+    let created = null;
     try {
-      await browser.tabs.create(props);
+      created = await browser.tabs.create(props);
     } catch (e) {
       // Container missing or discard rejected — retry progressively simpler.
       delete props.cookieStoreId;
       try {
-        await browser.tabs.create(props);
+        created = await browser.tabs.create(props);
       } catch (e2) {
         delete props.discarded;
         delete props.title;
-        await browser.tabs.create(props).catch(() => {});
+        created = await browser.tabs.create(props).catch(() => null);
       }
+    }
+    if (created && hasTabGroups && t.groupId != null) {
+      grouped.push({ tabId: created.id, groupId: t.groupId });
     }
   }
   await browser.tabs.remove(placeholderId).catch(() => {});
+  if (grouped.length) await restoreTabGroups(win.id, grouped, session.groups);
   await snapshotWindow(win.id); // persists + broadcasts
+}
+
+/*
+ * Re-create the saved tab groups in a freshly restored window. Created tabs are
+ * regrouped by their stored (snapshot-local) group id, then each new group is
+ * relabeled with its saved title/color/collapsed state. Best-effort: a failure
+ * to group or to set metadata just leaves those tabs ungrouped.
+ */
+async function restoreTabGroups(windowId, grouped, savedGroups) {
+  const byGroup = new Map();
+  for (const g of grouped) {
+    const ids = byGroup.get(g.groupId) || [];
+    ids.push(g.tabId);
+    byGroup.set(g.groupId, ids);
+  }
+  const meta = new Map((savedGroups || []).map((g) => [g.id, g]));
+  for (const [oldId, tabIds] of byGroup) {
+    let newGroupId;
+    try {
+      newGroupId = await browser.tabs.group({
+        tabIds,
+        createProperties: { windowId },
+      });
+    } catch (e) {
+      continue;
+    }
+    // Firefox may not return the new id; recover it from a grouped tab.
+    if (newGroupId == null) {
+      const t = await browser.tabs.get(tabIds[0]).catch(() => null);
+      newGroupId = t && t.groupId;
+    }
+    const m = meta.get(oldId);
+    if (newGroupId == null || newGroupId < 0 || !m) continue;
+    const update = {};
+    if (m.title) update.title = m.title;
+    if (m.color) update.color = m.color;
+    if (m.collapsed) update.collapsed = true;
+    if (Object.keys(update).length) {
+      await browser.tabGroups.update(newGroupId, update).catch(() => {});
+    }
+  }
 }
 
 /*
