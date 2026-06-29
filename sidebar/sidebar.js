@@ -22,9 +22,11 @@ let namingInProgress = false; // "track this window" name input is showing
 let suggestedName = "";
 let editingSessionId = null;  // session currently being renamed
 let confirmingDeleteId = null;
+let searchQuery = "";         // lowercased filter/search text from the header box
+let dragSource = null;        // descriptor of the tab row currently being dragged
 const expandedSessions = new Set(); // session ids with their tab list shown
 const expandedWindows = new Set();  // untracked window ids with tabs shown
-const collapsedSections = new Set(); // section keys (open/closed/untracked) hidden
+const collapsedSections = new Set(); // section keys (open/closed/untracked/results) hidden
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -96,6 +98,97 @@ function relativeTime(ts) {
   const days = Math.round(hr / 24);
   if (days < 7) return `${days} d ago`;
   return new Date(ts).toLocaleDateString();
+}
+
+/* ---------------- search / filter ---------------- */
+
+function matchesText(text) {
+  return (
+    typeof text === "string" &&
+    text.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+}
+
+function tabMatches(t) {
+  return matchesText(t.title) || matchesText(t.url);
+}
+
+// A session is kept by the filter when its name matches or any of its tabs do.
+function sessionMatches(s) {
+  return matchesText(s.name) || (s.tabs || []).some(tabMatches);
+}
+
+function untrackedMatches(w) {
+  return matchesText(w.title) || (w.tabs || []).some(tabMatches);
+}
+
+/* ---------------- tab drag-and-drop ---------------- */
+
+// Build the transfer descriptor handed to the background for a dragged tab.
+// Open/closed session tabs reference their saved entry; untracked-window tabs
+// carry the live tab id directly.
+function sessionTabSource(s, t, i) {
+  return {
+    url: t.url,
+    title: t.title,
+    pinned: !!t.pinned,
+    cookieStoreId: t.cookieStoreId,
+    saved: { sessionId: s.id, tabIndex: i },
+    live: null,
+  };
+}
+
+function windowTabSource(w, t) {
+  return {
+    url: t.url,
+    title: t.title,
+    pinned: !!t.pinned,
+    saved: null,
+    live: { windowId: w.id, tabId: t.id },
+  };
+}
+
+function makeTabDraggable(node, source) {
+  node.setAttribute("draggable", "true");
+  node.addEventListener("dragstart", (e) => {
+    dragSource = source;
+    node.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "copyMove";
+    // Firefox requires data to be set for a drag to start.
+    e.dataTransfer.setData("text/plain", source.url || "");
+  });
+  node.addEventListener("dragend", () => {
+    dragSource = null;
+    node.classList.remove("dragging");
+    document
+      .querySelectorAll(".drop-target")
+      .forEach((n) => n.classList.remove("drop-target"));
+  });
+}
+
+// Mark a session row as a drop target for tab transfers. Ctrl-drop copies;
+// a plain drop moves.
+function makeSessionDropTarget(row, sessionId) {
+  row.addEventListener("dragover", (e) => {
+    if (!dragSource) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = e.ctrlKey ? "copy" : "move";
+    row.classList.add("drop-target");
+  });
+  row.addEventListener("dragleave", () => row.classList.remove("drop-target"));
+  row.addEventListener("drop", (e) => {
+    if (!dragSource) return;
+    e.preventDefault();
+    e.stopPropagation();
+    row.classList.remove("drop-target");
+    send({
+      type: "transferTab",
+      source: dragSource,
+      targetSessionId: sessionId,
+      copy: e.ctrlKey,
+    });
+    dragSource = null;
+  });
 }
 
 /* ---------------- current window card ---------------- */
@@ -199,15 +292,15 @@ function renderSessions() {
   const container = $("#session-list");
   container.textContent = "";
 
-  const open = state.sessions
+  let open = state.sessions
     .filter((s) => s.open)
     .sort((a, b) => a.name.localeCompare(b.name));
-  const closed = state.sessions
+  let closed = state.sessions
     .filter((s) => !s.open)
     .sort((a, b) => (b.lastSaved || 0) - (a.lastSaved || 0));
   // The current window is already represented by the "This window" card, so
   // keep it out of the Untracked list to avoid showing it twice.
-  const untracked = (state.untrackedWindows || []).filter(
+  let untracked = (state.untrackedWindows || []).filter(
     (w) => w.id !== currentWindowId
   );
 
@@ -222,7 +315,26 @@ function renderSessions() {
     return;
   }
 
+  // With a search active, surface individual matching tabs in their own
+  // section and filter the session rows down to those that match by name or
+  // by a contained tab.
+  let results = [];
+  if (searchQuery) {
+    results = buildSearchResults(open, closed);
+    open = open.filter(sessionMatches);
+    closed = closed.filter(sessionMatches);
+    untracked = untracked.filter(untrackedMatches);
+    if (!open.length && !closed.length && !untracked.length && !results.length) {
+      container.append(
+        el("div", { class: "empty" }, `No matches for “${searchQuery}”.`)
+      );
+      return;
+    }
+  }
+
   renderSection(container, "open", "Open", open, renderSession);
+  // Results sit below the Open list, spanning open and closed sessions alike.
+  renderSection(container, "results", "Search results", results, renderSearchResult);
   renderSection(container, "closed", "Closed", closed, renderSession);
   renderSection(
     container,
@@ -231,6 +343,52 @@ function renderSessions() {
     untracked,
     renderUntrackedWindow
   );
+}
+
+// Flatten every matching tab across the given open + closed sessions into
+// result rows, each remembering its parent session and saved index.
+function buildSearchResults(open, closed) {
+  const results = [];
+  for (const s of [...open, ...closed]) {
+    (s.tabs || []).forEach((t, i) => {
+      if (tabMatches(t)) results.push({ session: s, tab: t, tabIndex: i });
+    });
+  }
+  return results;
+}
+
+function renderSearchResult(r) {
+  const row = el(
+    "div",
+    {
+      class: "tab result",
+      title: `${r.tab.url}\n${
+        r.session.open
+          ? "Click to focus this tab"
+          : "Click to open this tab in the current window"
+      }`,
+      onclick: () =>
+        send({
+          type: "openTab",
+          sessionId: r.session.id,
+          tabIndex: r.tabIndex,
+          targetWindowId: currentWindowId,
+        }),
+    },
+    faviconEl(r.tab),
+    r.tab.pinned ? el("span", { class: "pin", title: "Pinned" }, icon("pin")) : null,
+    el("span", { class: "tab-title" }, r.tab.title || r.tab.url),
+    el(
+      "span",
+      {
+        class: `result-session${r.session.open ? " open" : ""}`,
+        title: `In session “${r.session.name}”`,
+      },
+      r.session.name
+    )
+  );
+  makeTabDraggable(row, sessionTabSource(r.session, r.tab, r.tabIndex));
+  return row;
 }
 
 function renderSection(container, key, label, items, renderItem) {
@@ -326,19 +484,21 @@ function renderUntrackedWindow(w) {
 function renderWindowTabList(w) {
   const list = el("div", { class: "tab-list" });
   (w.tabs || []).forEach((t) => {
-    list.append(
-      el(
-        "div",
-        {
-          class: "tab",
-          title: `${t.url}\nClick to focus this tab`,
-          onclick: () => send({ type: "focusTab", windowId: w.id, tabId: t.id }),
-        },
-        faviconEl(t),
-        t.pinned ? el("span", { class: "pin", title: "Pinned" }, icon("pin")) : null,
-        el("span", { class: "tab-title" }, t.title || t.url)
-      )
+    const source = windowTabSource(w, t);
+    const tabRow = el(
+      "div",
+      {
+        class: "tab",
+        title: `${t.url}\nClick to focus this tab\nDrag onto a session to move it (Ctrl to copy)`,
+        onclick: () => send({ type: "focusTab", windowId: w.id, tabId: t.id }),
+        oncontextmenu: (e) => showTabContextMenu(e, source),
+      },
+      faviconEl(t),
+      t.pinned ? el("span", { class: "pin", title: "Pinned" }, icon("pin")) : null,
+      el("span", { class: "tab-title" }, t.title || t.url)
     );
+    makeTabDraggable(tabRow, source);
+    list.append(tabRow);
   });
   if (!list.children.length) {
     list.append(el("div", { class: "tab none" }, "No tabs"));
@@ -352,15 +512,23 @@ function renderSession(s) {
     ? `${tabCount} tab${tabCount === 1 ? "" : "s"} · open`
     : `${tabCount} tab${tabCount === 1 ? "" : "s"} · saved ${relativeTime(s.lastSaved)}`;
   const expanded = expandedSessions.has(s.id);
+  // The session backing this sidebar's own window — mark it so it's obvious
+  // which session you're in at a glance.
+  const isCurrent = s.open && s.windowId === currentWindowId;
 
   const row = el("div", {
-    class: `session${s.open ? " open" : ""}${editingSessionId === s.id ? " editing" : ""}`,
+    class:
+      `session${s.open ? " open" : ""}` +
+      `${isCurrent ? " current" : ""}` +
+      `${editingSessionId === s.id ? " editing" : ""}`,
     title: s.open
       ? "Click to focus this window"
       : "Click to reopen this session in a new window",
     onclick: () => send({ type: "openSession", sessionId: s.id }),
     oncontextmenu: (e) => showContextMenu(e, s),
   });
+  // Any session row can receive a tab dragged from elsewhere.
+  makeSessionDropTarget(row, s.id);
 
   row.append(
     el(
@@ -403,7 +571,16 @@ function renderSession(s) {
       input.select();
     }, 0);
   } else {
-    info.append(el("div", { class: "name" }, s.name));
+    info.append(
+      el(
+        "div",
+        { class: "name-row" },
+        el("span", { class: "name" }, s.name),
+        isCurrent
+          ? el("span", { class: "current-badge", title: "This window" }, "current")
+          : null
+      )
+    );
     info.append(el("div", { class: "meta" }, meta));
   }
   row.append(info);
@@ -485,6 +662,7 @@ function faviconEl(t) {
 function renderTabList(s) {
   const list = el("div", { class: "tab-list" });
   (s.tabs || []).forEach((t, i) => {
+    const source = sessionTabSource(s, t, i);
     const tabRow = el(
       "div",
       {
@@ -493,7 +671,7 @@ function renderTabList(s) {
           s.open
             ? "Click to focus this tab"
             : "Click to open just this tab in the current window"
-        }`,
+        }\nDrag onto a session to move it (Ctrl to copy)`,
         onclick: () =>
           send({
             type: "openTab",
@@ -501,11 +679,13 @@ function renderTabList(s) {
             tabIndex: i,
             targetWindowId: currentWindowId,
           }),
+        oncontextmenu: (e) => showTabContextMenu(e, source),
       },
       faviconEl(t),
       t.pinned ? el("span", { class: "pin", title: "Pinned" }, icon("pin")) : null,
       el("span", { class: "tab-title" }, t.title || t.url)
     );
+    makeTabDraggable(tabRow, source);
     list.append(tabRow);
   });
   if (!list.children.length) {
@@ -548,9 +728,13 @@ function showContextMenu(e, s) {
     ),
     item("Export session…", () => exportSessionToFile(s.id))
   );
-  document.body.append(menu);
+  placeMenuAt(menu, e);
+}
 
-  // Clamp to the viewport — sidebars are narrow.
+// Append a freshly built context menu and clamp it inside the viewport —
+// sidebars are narrow.
+function placeMenuAt(menu, e) {
+  document.body.append(menu);
   const rect = menu.getBoundingClientRect();
   let x = e.clientX;
   let y = e.clientY;
@@ -558,6 +742,55 @@ function showContextMenu(e, s) {
   if (y + rect.height > window.innerHeight) y = window.innerHeight - rect.height - 4;
   menu.style.left = `${Math.max(0, x)}px`;
   menu.style.top = `${Math.max(0, y)}px`;
+}
+
+// Right-click menu on a tab row: move or copy the tab into another session.
+function showTabContextMenu(e, source) {
+  e.preventDefault();
+  e.stopPropagation();
+  closeContextMenu();
+
+  // Every session is a candidate except the one the tab already lives in.
+  const targets = state.sessions
+    .filter((s) => !(source.saved && source.saved.sessionId === s.id))
+    .sort((a, b) => {
+      if (a.open !== b.open) return a.open ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+
+  const menu = el("div", { class: "context-menu", id: "context-menu" });
+  if (!targets.length) {
+    menu.append(el("div", { class: "menu-empty" }, "No other sessions"));
+  } else {
+    const group = (label, copy) => {
+      menu.append(el("div", { class: "menu-label" }, label));
+      for (const s of targets) {
+        menu.append(
+          el(
+            "div",
+            {
+              class: "menu-item",
+              onclick: (ev) => {
+                ev.stopPropagation();
+                closeContextMenu();
+                send({
+                  type: "transferTab",
+                  source,
+                  targetSessionId: s.id,
+                  copy,
+                });
+              },
+            },
+            el("span", { class: `menu-dot${s.open ? " open" : ""}` }),
+            el("span", { class: "menu-item-label" }, s.name)
+          )
+        );
+      }
+    };
+    group("Move to", false);
+    group("Copy to", true);
+  }
+  placeMenuAt(menu, e);
 }
 
 document.addEventListener("click", closeContextMenu);
@@ -664,6 +897,31 @@ $("#import-file").addEventListener("change", () => {
   const file = input.files[0];
   input.value = ""; // allow re-selecting the same file
   if (file) importFromFile(file);
+});
+
+const searchInput = $("#search");
+const searchClear = $("#search-clear");
+function clearSearch() {
+  searchInput.value = "";
+  searchQuery = "";
+  searchClear.hidden = true;
+  renderSessions();
+}
+searchInput.addEventListener("input", () => {
+  searchQuery = searchInput.value.trim();
+  searchClear.hidden = !searchInput.value;
+  // Only the list depends on the query; the "This window" card does not.
+  renderSessions();
+});
+searchInput.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && searchInput.value) {
+    e.stopPropagation(); // keep the global Escape handler from firing too
+    clearSearch();
+  }
+});
+searchClear.addEventListener("click", () => {
+  clearSearch();
+  searchInput.focus();
 });
 
 (async function init() {

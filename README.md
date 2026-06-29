@@ -94,6 +94,20 @@ equivalent and are silently absent on Edge/Chrome:
   pinned marker, title). Clicking a tab in an **open** session focuses that
   tab; in a **closed** session it opens just that tab in the current window
   without restoring the whole session.
+- **Current session**: the session backing the window you're in is marked with
+  an accent stripe and a *current* badge in the Open list, so it's obvious at a
+  glance which session you're looking at.
+- **Search**: the header search box filters the session list by name, tab
+  title, or URL, and gathers every matching tab — across open *and* closed
+  sessions — into a dedicated **Search results** section under the Open list.
+  Each result shows its parent session and, when clicked, focuses the tab if
+  its session is open or opens it in the current window if closed.
+- **Move / copy tabs between sessions**: drag any tab row (from an expanded
+  session or untracked window) onto a session to move it there; hold **Ctrl**
+  while dropping to copy instead. Right-clicking a tab offers the same *Move
+  to* / *Copy to* choices as a menu. When the target session is **open** the
+  tab is moved into its live window (a live tab is physically relocated via
+  `tabs.move`); when it's **closed** the tab is appended to its saved list.
 - **Right-click menu**: right-clicking a session offers *Close session* /
   *Open session* (depending on its state — closing takes a final snapshot
   first) and *Export session…*, which downloads just that session as a JSON

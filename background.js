@@ -651,6 +651,175 @@ async function openSingleTab(sessionId, tabIndex, targetWindowId) {
   }
 }
 
+/* ---------------- moving / copying tabs between sessions ---------------- */
+
+/*
+ * Resolve the live tab behind a transfer source, if any. Untracked-window
+ * sources carry the live tab id directly; open-session sources reference a
+ * saved snapshot entry, so the live tab is matched by URL (falling back to the
+ * saved index) inside the session's window, mirroring openSingleTab. Closed
+ * sessions have no live tab and return null.
+ */
+async function resolveLiveSourceTab(source) {
+  if (source.live && source.live.tabId != null) return source.live;
+  if (source.saved) {
+    const s = sessions[source.saved.sessionId];
+    if (s && s.open && s.windowId != null) {
+      const live = await browser.tabs
+        .query({ windowId: s.windowId })
+        .catch(() => []);
+      const match =
+        live.find((t) => t.url === source.url) || live[source.saved.tabIndex];
+      if (match) return { windowId: s.windowId, tabId: match.id };
+    }
+  }
+  return null;
+}
+
+// Create a tab carrying the source's URL into a live window, lazy-loaded the
+// same way openSession restores tabs. Returns whether a tab was created.
+async function createTabFromSource(windowId, source) {
+  if (!isRestorableUrl(source.url)) return false;
+  const props = {
+    windowId,
+    url: source.url,
+    pinned: !!source.pinned,
+    active: false,
+  };
+  if (isFirefox && /^https?:/i.test(source.url)) {
+    props.discarded = true;
+    if (source.title) props.title = source.title;
+  }
+  if (
+    isFirefox &&
+    source.cookieStoreId &&
+    source.cookieStoreId !== "firefox-default"
+  ) {
+    props.cookieStoreId = source.cookieStoreId;
+  }
+  try {
+    await browser.tabs.create(props);
+  } catch (e) {
+    delete props.cookieStoreId;
+    try {
+      await browser.tabs.create(props);
+    } catch (e2) {
+      delete props.discarded;
+      delete props.title;
+      try {
+        await browser.tabs.create(props);
+      } catch (e3) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+function savedTabFromSource(source) {
+  const tab = {
+    url: source.url,
+    title: source.title || source.url,
+    pinned: !!source.pinned,
+    active: false,
+  };
+  if (typeof source.cookieStoreId === "string") {
+    tab.cookieStoreId = source.cookieStoreId;
+  }
+  return tab;
+}
+
+// Remove the source tab after a successful move (the copy path never calls
+// this). A live tab is closed; a saved entry in a closed session is spliced
+// out. windowToSession windows touched here are added to `affected` so the
+// caller re-snapshots them.
+async function removeTransferSource(source, live, affected) {
+  if (live && (!source.saved || isSessionOpen(source.saved.sessionId))) {
+    await browser.tabs.remove(live.tabId).catch(() => {});
+    affected.add(live.windowId);
+    return;
+  }
+  if (source.saved) {
+    const s = sessions[source.saved.sessionId];
+    if (s && Array.isArray(s.tabs)) {
+      const at =
+        s.tabs[source.saved.tabIndex] &&
+        s.tabs[source.saved.tabIndex].url === source.url
+          ? source.saved.tabIndex
+          : s.tabs.findIndex((t) => t.url === source.url);
+      if (at >= 0) {
+        s.tabs.splice(at, 1);
+        s.lastSaved = Date.now();
+      }
+    }
+  }
+}
+
+function isSessionOpen(sessionId) {
+  const s = sessions[sessionId];
+  return !!(s && s.open && s.windowId != null);
+}
+
+/*
+ * Move or copy a single tab into a target session. Handles every combination
+ * of source/target state:
+ *   - target open  + live source  + move  -> physically move the live tab
+ *     (tabs.move) into the target's window;
+ *   - target open  + (copy, or a closed-session source) -> create a tab from
+ *     the URL in the target's window;
+ *   - target closed -> append the tab to the target's saved list.
+ * On a move the source is then removed (live tab closed, or saved entry
+ * dropped). Affected tracked windows are re-snapshotted so the sidebar and
+ * storage reflect the change immediately.
+ */
+async function transferTab(source, targetSessionId, copy) {
+  const target = sessions[targetSessionId];
+  if (!target || !source || typeof source.url !== "string" || !source.url) {
+    return;
+  }
+  // Dropping a saved tab back onto its own session is a no-op.
+  if (source.saved && source.saved.sessionId === targetSessionId && !copy) {
+    return;
+  }
+
+  const live = await resolveLiveSourceTab(source);
+  const affected = new Set();
+
+  if (target.open && target.windowId != null) {
+    if (live && !copy) {
+      try {
+        await browser.tabs.move(live.tabId, {
+          windowId: target.windowId,
+          index: -1,
+        });
+        affected.add(live.windowId);
+        affected.add(target.windowId);
+      } catch (e) {
+        // Move rejected (e.g. tab vanished); leave the source untouched.
+        return;
+      }
+    } else {
+      const created = await createTabFromSource(target.windowId, source);
+      if (!created) return;
+      affected.add(target.windowId);
+      if (!copy) await removeTransferSource(source, live, affected);
+    }
+  } else {
+    target.tabs = target.tabs || [];
+    target.tabs.push(savedTabFromSource(source));
+    target.lastSaved = Date.now();
+    if (!copy) await removeTransferSource(source, live, affected);
+  }
+
+  // Re-snapshot any tracked windows we changed; both branches still need a
+  // persist+broadcast for closed sessions edited in memory.
+  for (const windowId of affected) {
+    if (windowToSession.has(windowId)) await captureWindow(windowId);
+  }
+  await persistSessions();
+  broadcast();
+}
+
 /* ---------------- auto-track ---------------- */
 
 const AUTO_TRACK_DELAY_MS = 1500;
@@ -884,6 +1053,8 @@ async function handleMessage(msg) {
       return snapshotAllTracked();
     case "openTab":
       return openSingleTab(msg.sessionId, msg.tabIndex, msg.targetWindowId);
+    case "transferTab":
+      return transferTab(msg.source, msg.targetSessionId, msg.copy);
     case "focusWindow":
       return focusWindow(msg.windowId);
     case "focusTab":

@@ -32,8 +32,6 @@ optimizes for:
 | **Session history / versioning** | L | High | Keep the last N tab-list snapshots per session so you can roll back after accidentally closing/navigating. Storage cost grows; needs pruning. Pairs well with per-session storage keys (below). |
 | **Partial restore** | M | High | Checkbox-select which tabs to reopen instead of the whole window. Natural extension of the existing expand-tab UI. |
 | **Restore into current window** | S | Med | Option to append a session's tabs to the focused window instead of opening a new one. |
-| **Move / copy a tab between sessions** | M | Med | Drag a tab from one expanded session into another, or a context-menu "Send to session…". |
-| **Drag a tab onto a session to move its window** | M | High | Drag a tab out of an expanded window/session and drop it on another session to move the **live** tab into that session's window (`tabs.move` to the target window). Clean when the target is open; for a closed target, either open it first or append the URL to its saved list. Needs drag-and-drop affordances on tab rows and drop targets on session rows. Builds on the expandable tab UI; closely related to "Move / copy a tab between sessions" above. |
 | **Duplicate a session** | S | Low | One-click clone of a closed session's tab list. |
 | **Merge / split sessions** | M | Med | Combine two closed sessions, or split selected tabs into a new one. |
 | **Soft delete / undo** | S | Med | Move deletes to a short-lived trash with an undo toast instead of the current two-click confirm. |
@@ -44,10 +42,7 @@ optimizes for:
 
 | Idea | Effort | Impact | Notes |
 |---|---|---|---|
-| **Search / filter box** | M | High | Filter sessions and tabs by name/URL/title in the sidebar header. High value once the list grows. |
-| **Global tab search with results section** | M | High | A search box (in the header) that matches tab titles across **every** session — open and closed. Matches render in their own collapsible **Search results** section placed below the "This window" card and the Open list, each result showing its tab title and parent session, and clicking it acts on that tab (focus if its session is open, open-the-tab if closed). Differs from the in-place "Search / filter box" above: this surfaces individual matching tabs in a dedicated section rather than filtering the existing session rows. Could extend to URL matching and result highlighting. |
 | **Tags or folders** | L | Med | Group sessions beyond Open/Closed/Untracked. Adds data-model complexity. |
-| **Highlight the current active session** | S | Med | Visually mark the session backing the currently focused window in the **Open** section (e.g. a highlighted row, accent border, or "current" badge) so it's obvious which session you're in at a glance. The sidebar already knows the current window via `getState`/`renderCurrentWindow`; this surfaces that same window inside the Open list. Update the marker on `windows.onFocusChanged`. |
 | **Pin / favorite sessions** | S | Med | Keep important sessions at the top of the list. |
 | **Per-session color or icon** | S | Low | Visual differentiation; could also drive a window-title or tab-group color. |
 | **Drag-and-drop reordering** | M | Low | Manual ordering of sessions; needs a persisted order field. |
@@ -59,7 +54,7 @@ optimizes for:
 |---|---|---|---|
 | **Keyboard shortcuts (`commands`)** _(discussed)_ | S | Med | Open the panel, Save now, track current window, quick-switch. Add the `commands` manifest key + handlers. |
 | **Browser context-menu integration** | M | Med | Right-click a page/link → "Add to session…". Needs the `contextMenus`/`menus` permission. |
-| **Tab group preservation** | L | Med | Save/restore native tab groups (names, colors, collapsed state). APIs differ across engines; Firefox tab-group support is newer. |
+| **Tab group preservation** | L | Med | Save/restore native tab groups (names, colors, collapsed state). APIs differ across engines; Firefox tab-group support is newer. Two facets: (1) **on save/restore** — persist each tab's group membership and the group's name/color/collapsed state, and recreate the groups when reopening a session; (2) **visually in the sidebar** — when a session's tabs are expanded, render them grouped by tab-group with the group's name and color (and respect collapsed state) instead of a flat list, so the sidebar mirrors the browser. The visual half can ship first against live windows via the `tabGroups`/`tabs.group` APIs; the save half needs the group metadata stored alongside each session's tabs and a migration. |
 
 ## Sync, backup & portability
 
@@ -113,14 +108,12 @@ optimizes for:
 If pulling the next few items, these give the most value per unit of effort and
 stay within the guiding principles:
 
-1. **Search / filter box** (M / High) — the single biggest usability win as the
-   session list grows.
-2. **Keyboard shortcuts** (S / Med) — cheap, and expected of a power-user tool.
-3. **Partial restore** (M / High) — builds directly on the existing expandable
+1. **Keyboard shortcuts** (S / Med) — cheap, and expected of a power-user tool.
+2. **Partial restore** (M / High) — builds directly on the existing expandable
    tab UI.
-4. **Unit tests + CI** (M / High) — locks in the behavior we keep iterating on
+3. **Unit tests + CI** (M / High) — locks in the behavior we keep iterating on
    and makes future changes safer.
-5. **Release script** (S / Med) — removes the recurring two-manifest version
+4. **Release script** (S / Med) — removes the recurring two-manifest version
    bump as a manual footgun.
 
 ---
